@@ -4,6 +4,7 @@ from collections import Counter
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 try:
@@ -158,15 +159,67 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def split_cell_values(value, separator=";"):
+    if pd.isna(value):
+        return []
+
+    parts = str(value).split(separator)
+
+    cleaned = []
+    for part in parts:
+        item = part.strip()
+        if item != "" and item.lower() != "nan":
+            cleaned.append(item)
+
+    return cleaned
+
+
 def summary_table(df: pd.DataFrame, column: str) -> pd.DataFrame:
     data = df[column].fillna("Missing").astype(str).str.strip()
     counts = data.value_counts(dropna=False)
 
-    return pd.DataFrame({
+    table = pd.DataFrame({
         "Response": counts.index,
         "Count": counts.values,
         "Percentage": (counts.values / max(len(df), 1) * 100).round(1),
     })
+
+    table["Label"] = (
+        table["Count"].astype(str)
+        + " ("
+        + table["Percentage"].astype(str)
+        + "%)"
+    )
+
+    return table
+
+
+def split_summary_table(df: pd.DataFrame, column: str, separator=";") -> pd.DataFrame:
+    answers = []
+
+    for value in df[column].dropna():
+        answers.extend(split_cell_values(value, separator))
+
+    if len(answers) == 0:
+        return pd.DataFrame(columns=["Response", "Count", "Percentage", "Label"])
+
+    counts = pd.Series(answers).value_counts().reset_index()
+    counts.columns = ["Response", "Count"]
+
+    total = counts["Count"].sum()
+
+    counts["Percentage"] = (
+        counts["Count"] / max(total, 1) * 100
+    ).round(1)
+
+    counts["Label"] = (
+        counts["Count"].astype(str)
+        + " ("
+        + counts["Percentage"].astype(str)
+        + "%)"
+    )
+
+    return counts
 
 
 def numeric_columns(df: pd.DataFrame):
@@ -197,6 +250,36 @@ def likely_text_columns(df: pd.DataFrame):
             cols.append(col)
 
     return cols
+
+
+def create_heatmap_with_labels(table, title):
+    total = table.values.sum()
+
+    if total == 0:
+        total = 1
+
+    percentages = (table / total * 100).round(1)
+
+    text_labels = table.astype(str) + "<br>(" + percentages.astype(str) + "%)"
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=table.values,
+            x=table.columns.astype(str),
+            y=table.index.astype(str),
+            text=text_labels.values,
+            texttemplate="%{text}",
+            hovertemplate="Row: %{y}<br>Column: %{x}<br>Count: %{z}<extra></extra>"
+        )
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Column Category",
+        yaxis_title="Row Category"
+    )
+
+    return fig
 
 
 # =========================================================
@@ -385,9 +468,11 @@ def data_quality(df, name):
         quality.sort_values("Missing %", ascending=False).head(20),
         x="Column",
         y="Missing %",
+        text="Missing %",
         title="Top Missingness by Column"
     )
 
+    fig.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig, width="stretch")
 
 
@@ -411,18 +496,40 @@ def question_lab(df, name):
         key=f"{name}_ql_chart"
     )
 
-    table = summary_table(df, col)
+    split_answers = st.checkbox(
+        "Split multiple answers inside cells",
+        value=True,
+        key=f"{name}_ql_split"
+    )
 
-    st.dataframe(table, width="stretch")
+    separator = st.text_input(
+        "Separator between answers",
+        value=";",
+        key=f"{name}_ql_separator"
+    )
+
+    if split_answers:
+        table = split_summary_table(df, col, separator)
+    else:
+        table = summary_table(df, col)
+
+    if table.empty:
+        st.warning("No valid answers found.")
+        return
+
+    st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
 
     if chart == "Bar":
         fig = px.bar(
             table,
             x="Response",
             y="Count",
-            text="Count",
+            text="Label",
             title=col
         )
+
+        fig.update_traces(textposition="outside", cliponaxis=False)
+
     else:
         hole = 0.45 if chart == "Donut" else 0
 
@@ -434,13 +541,22 @@ def question_lab(df, name):
             title=col
         )
 
+        fig.update_traces(textinfo="label+percent+value")
+
+    fig.update_layout(
+        xaxis_title="Response",
+        yaxis_title="Count",
+        uniformtext_minsize=9,
+        uniformtext_mode="hide"
+    )
+
     st.plotly_chart(fig, width="stretch")
 
     if st.button("Generate AI interpretation", key=f"{name}_ql_ai"):
         st.write(
             ai_generate(
                 f"{name}: {col}",
-                table.to_string(index=False),
+                table[["Response", "Count", "Percentage"]].to_string(index=False),
                 f"Sample size: {len(df)}"
             )
         )
@@ -476,7 +592,7 @@ def multi_variable_chart_lab(df, name):
 
     split_multiple_answers = st.checkbox(
         "Split multiple answers inside cells",
-        value=False,
+        value=True,
         key=f"{name}_multi_variable_split"
     )
 
@@ -492,17 +608,14 @@ def multi_variable_chart_lab(df, name):
         long_rows = []
 
         for column in selected_columns:
-            for value in chart_df[column].dropna().astype(str):
-                parts = value.split(separator)
+            for value in chart_df[column].dropna():
+                parts = split_cell_values(value, separator)
 
                 for part in parts:
-                    clean_answer = part.strip()
-
-                    if clean_answer != "":
-                        long_rows.append({
-                            "Question": column,
-                            "Answer": clean_answer
-                        })
+                    long_rows.append({
+                        "Question": column,
+                        "Answer": part
+                    })
 
         long_df = pd.DataFrame(long_rows)
 
@@ -519,75 +632,12 @@ def multi_variable_chart_lab(df, name):
         st.warning("No valid data found in the selected columns.")
         return
 
-    if chart_type == "Count comparison":
-        summary = (
-            long_df
-            .groupby(["Question", "Answer"])
-            .size()
-            .reset_index(name="Count")
-        )
-
-        st.subheader("Summary table")
-        st.dataframe(summary, width="stretch")
-
-        fig = px.bar(
-            summary,
-            x="Question",
-            y="Count",
-            color="Answer",
-            text="Count",
-            title=f"{name}: Count comparison across selected variables"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Grouped bar chart":
-        summary = (
-            long_df
-            .groupby(["Question", "Answer"])
-            .size()
-            .reset_index(name="Count")
-        )
-
-        st.subheader("Summary table")
-        st.dataframe(summary, width="stretch")
-
-        fig = px.bar(
-            summary,
-            x="Answer",
-            y="Count",
-            color="Question",
-            barmode="group",
-            text="Count",
-            title=f"{name}: Grouped bar chart"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Stacked bar chart":
-        summary = (
-            long_df
-            .groupby(["Question", "Answer"])
-            .size()
-            .reset_index(name="Count")
-        )
-
-        st.subheader("Summary table")
-        st.dataframe(summary, width="stretch")
-
-        fig = px.bar(
-            summary,
-            x="Question",
-            y="Count",
-            color="Answer",
-            barmode="stack",
-            text="Count",
-            title=f"{name}: Stacked bar chart"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Percentage stacked bar chart":
+    if chart_type in [
+        "Count comparison",
+        "Grouped bar chart",
+        "Stacked bar chart",
+        "Percentage stacked bar chart"
+    ]:
         summary = (
             long_df
             .groupby(["Question", "Answer"])
@@ -601,17 +651,77 @@ def multi_variable_chart_lab(df, name):
             .round(1)
         )
 
-        st.subheader("Percentage summary table")
-        st.dataframe(summary, width="stretch")
+        summary["Label"] = (
+            summary["Count"].astype(str)
+            + " ("
+            + summary["Percentage"].astype(str)
+            + "%)"
+        )
 
-        fig = px.bar(
-            summary,
-            x="Question",
-            y="Percentage",
-            color="Answer",
-            barmode="stack",
-            text="Percentage",
-            title=f"{name}: Percentage stacked bar chart"
+        st.subheader("Summary table")
+        st.dataframe(
+            summary[["Question", "Answer", "Count", "Percentage"]],
+            width="stretch"
+        )
+
+        if chart_type == "Count comparison":
+            fig = px.bar(
+                summary,
+                x="Question",
+                y="Count",
+                color="Answer",
+                text="Label",
+                title=f"{name}: Count comparison across selected variables"
+            )
+
+            fig.update_traces(textposition="inside")
+
+        elif chart_type == "Grouped bar chart":
+            fig = px.bar(
+                summary,
+                x="Answer",
+                y="Count",
+                color="Question",
+                barmode="group",
+                text="Label",
+                title=f"{name}: Grouped bar chart"
+            )
+
+            fig.update_traces(textposition="outside", cliponaxis=False)
+
+        elif chart_type == "Stacked bar chart":
+            fig = px.bar(
+                summary,
+                x="Question",
+                y="Count",
+                color="Answer",
+                barmode="stack",
+                text="Label",
+                title=f"{name}: Stacked bar chart"
+            )
+
+            fig.update_traces(textposition="inside")
+
+        else:
+            fig = px.bar(
+                summary,
+                x="Question",
+                y="Percentage",
+                color="Answer",
+                barmode="stack",
+                text="Label",
+                title=f"{name}: Percentage stacked bar chart"
+            )
+
+            fig.update_traces(textposition="inside")
+            fig.update_yaxes(title="Percentage")
+
+        fig.update_layout(
+            xaxis_title="Question / Answer",
+            yaxis_title="Count / Percentage",
+            uniformtext_minsize=9,
+            uniformtext_mode="hide",
+            legend_title_text="Answer / Question"
         )
 
         st.plotly_chart(fig, width="stretch")
@@ -633,18 +743,52 @@ def multi_variable_chart_lab(df, name):
             st.warning("Please choose two different variables.")
             return
 
+        split_heatmap = st.checkbox(
+            "Split answers in heatmap variables",
+            value=True,
+            key=f"{name}_heatmap_split"
+        )
+
+        heatmap_rows = []
+
+        for _, record in df[[row_column, column_column]].dropna(how="all").iterrows():
+            row_raw = record[row_column]
+            col_raw = record[column_column]
+
+            if pd.isna(row_raw) or pd.isna(col_raw):
+                continue
+
+            if split_heatmap:
+                row_values = split_cell_values(row_raw, separator)
+                col_values = split_cell_values(col_raw, separator)
+            else:
+                row_values = [str(row_raw).strip()]
+                col_values = [str(col_raw).strip()]
+
+            for row_value in row_values:
+                for col_value in col_values:
+                    heatmap_rows.append({
+                        "Row": row_value,
+                        "Column": col_value
+                    })
+
+        heatmap_df = pd.DataFrame(heatmap_rows)
+
+        if heatmap_df.empty:
+            st.warning("No valid data found for heatmap.")
+            return
+
         table = pd.crosstab(
-            df[row_column].fillna("Missing").astype(str),
-            df[column_column].fillna("Missing").astype(str)
+            heatmap_df["Row"],
+            heatmap_df["Column"]
         )
 
         st.subheader("Crosstab table")
         st.dataframe(table, width="stretch")
 
-        fig = px.imshow(
+        fig = create_heatmap_with_labels(
             table,
-            text_auto=True,
-            title=f"{name}: Heatmap of {row_column} vs {column_column}"
+            f"{name}: Heatmap of {row_column} vs {column_column}"
         )
 
         st.plotly_chart(fig, width="stretch")
@@ -668,6 +812,7 @@ def multi_variable_chart_lab(df, name):
             long_numeric,
             x="Question",
             y="Value",
+            points="all",
             title=f"{name}: Box plot for selected numeric variables"
         )
 
@@ -713,7 +858,7 @@ Preview of analysed data:
             ai_generate(
                 f"{name}: Multi-variable chart analysis",
                 ai_context,
-                "Interpret the selected variables academically. Explain the main patterns, differences, and limitations."
+                "Interpret the selected variables academically. Explain the main patterns, differences, percentages, and limitations."
             )
         )
 
@@ -759,17 +904,38 @@ def filter_lab(df, name):
         st.warning("No records match this filter.")
         return
 
-    table = summary_table(filtered_df, analysis_col)
+    split_answers = st.checkbox(
+        "Split multiple answers in analysed question",
+        value=True,
+        key=f"{name}_filter_split"
+    )
 
-    st.dataframe(table, width="stretch")
+    separator = st.text_input(
+        "Separator between answers",
+        value=";",
+        key=f"{name}_filter_separator"
+    )
+
+    if split_answers:
+        table = split_summary_table(filtered_df, analysis_col, separator)
+    else:
+        table = summary_table(filtered_df, analysis_col)
+
+    if table.empty:
+        st.warning("No valid answers found.")
+        return
+
+    st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
 
     fig = px.bar(
         table,
         x="Response",
         y="Count",
-        text="Count",
+        text="Label",
         title=f"{analysis_col} | {filter_col}: {value}"
     )
+
+    fig.update_traces(textposition="outside", cliponaxis=False)
 
     st.plotly_chart(fig, width="stretch")
 
@@ -777,7 +943,7 @@ def filter_lab(df, name):
         st.write(
             ai_generate(
                 f"{name}: Filtered Analysis",
-                table.to_string(index=False),
+                table[["Response", "Count", "Percentage"]].to_string(index=False),
                 f"Filter: {filter_col} = {value}. Sample size: {len(filtered_df)}"
             )
         )
@@ -814,15 +980,7 @@ def yes_no_pattern_lab(df, name):
     parsed_rows = []
 
     for response in responses:
-        parts = response.split(separator)
-
-        clean_parts = []
-
-        for part in parts:
-            answer = part.strip()
-
-            if answer != "":
-                clean_parts.append(answer)
+        clean_parts = split_cell_values(response, separator)
 
         if clean_parts:
             parsed_rows.append(clean_parts)
@@ -849,6 +1007,13 @@ def yes_no_pattern_lab(df, name):
             counts["Selection Count"] / len(parsed_rows) * 100
         ).round(1)
 
+        counts["Label"] = (
+            counts["Selection Count"].astype(str)
+            + " ("
+            + counts["Percentage of Selections"].astype(str)
+            + "%)"
+        )
+
         st.subheader("Multiple-response summary")
         st.dataframe(counts, width="stretch")
 
@@ -856,9 +1021,11 @@ def yes_no_pattern_lab(df, name):
             counts,
             x="Answer Option",
             y="Selection Count",
-            text="Selection Count",
+            text="Label",
             title=f"Selected options in: {selected_column}"
         )
+
+        fig.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig, width="stretch")
 
@@ -939,6 +1106,18 @@ Results:
 
         first_choice.columns = ["Answer Option", "First Choice Count"]
 
+        total_first = first_choice["First Choice Count"].sum()
+        first_choice["Percentage"] = (
+            first_choice["First Choice Count"] / max(total_first, 1) * 100
+        ).round(1)
+
+        first_choice["Label"] = (
+            first_choice["First Choice Count"].astype(str)
+            + " ("
+            + first_choice["Percentage"].astype(str)
+            + "%)"
+        )
+
         st.subheader("First-choice summary")
         st.dataframe(first_choice, width="stretch")
 
@@ -950,15 +1129,19 @@ Results:
             title=f"Average ranking position: {selected_column}"
         )
 
+        fig_avg.update_traces(textposition="outside", cliponaxis=False)
+
         st.plotly_chart(fig_avg, width="stretch")
 
         fig_first = px.bar(
             first_choice,
             x="Answer Option",
             y="First Choice Count",
-            text="First Choice Count",
+            text="Label",
             title=f"Most common first-choice options: {selected_column}"
         )
+
+        fig_first.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig_first, width="stretch")
 
@@ -1036,23 +1219,84 @@ def crosstab_lab(df, name):
         st.warning("Please select two different variables for the relationship analysis.")
         return
 
-    row_series = df[row].fillna("Missing").astype(str)
-    col_series = df[col].fillna("Missing").astype(str)
+    split_answers = st.checkbox(
+        "Split multiple answers inside selected variables",
+        value=True,
+        key=f"{name}_cross_split"
+    )
 
-    table = pd.crosstab(row_series, col_series)
+    separator = st.text_input(
+        "Separator used between answers",
+        value=";",
+        key=f"{name}_cross_separator"
+    )
 
+    relationship_rows = []
+
+    for _, record in df[[row, col]].dropna(how="all").iterrows():
+        row_value_raw = record[row]
+        col_value_raw = record[col]
+
+        if pd.isna(row_value_raw) or pd.isna(col_value_raw):
+            continue
+
+        if split_answers:
+            row_values = split_cell_values(row_value_raw, separator)
+            col_values = split_cell_values(col_value_raw, separator)
+        else:
+            row_values = [str(row_value_raw).strip()]
+            col_values = [str(col_value_raw).strip()]
+
+        for row_value in row_values:
+            for col_value in col_values:
+                relationship_rows.append({
+                    "Row Category": row_value,
+                    "Column Category": col_value
+                })
+
+    relationship_df = pd.DataFrame(relationship_rows)
+
+    if relationship_df.empty:
+        st.warning("No valid relationship data found.")
+        return
+
+    table = pd.crosstab(
+        relationship_df["Row Category"],
+        relationship_df["Column Category"]
+    )
+
+    st.subheader("Crosstab table")
     st.dataframe(table, width="stretch")
 
-    long_table = table.reset_index()
+    long_table = (
+        table
+        .reset_index()
+        .melt(
+            id_vars="Row Category",
+            var_name="Column Category",
+            value_name="Count"
+        )
+    )
 
-    long_table.columns = ["Row Category"] + [
-        str(column) for column in long_table.columns[1:]
-    ]
+    long_table = long_table[long_table["Count"] > 0]
 
-    long_table = long_table.melt(
-        id_vars="Row Category",
-        var_name="Column Category",
-        value_name="Count"
+    total_count = long_table["Count"].sum()
+
+    long_table["Percentage"] = (
+        long_table["Count"] / max(total_count, 1) * 100
+    ).round(1)
+
+    long_table["Label"] = (
+        long_table["Count"].astype(str)
+        + " ("
+        + long_table["Percentage"].astype(str)
+        + "%)"
+    )
+
+    st.subheader("Chart data with percentages")
+    st.dataframe(
+        long_table[["Row Category", "Column Category", "Count", "Percentage"]],
+        width="stretch"
     )
 
     fig = px.bar(
@@ -1061,16 +1305,33 @@ def crosstab_lab(df, name):
         y="Count",
         color="Column Category",
         barmode="group",
+        text="Label",
         title=f"{row} vs {col}"
     )
 
+    fig.update_traces(textposition="outside", cliponaxis=False)
+
+    fig.update_layout(
+        xaxis_title="Row Category",
+        yaxis_title="Count",
+        uniformtext_minsize=9,
+        uniformtext_mode="hide"
+    )
+
     st.plotly_chart(fig, width="stretch")
+
+    heatmap_fig = create_heatmap_with_labels(
+        table,
+        f"Heatmap: {row} vs {col}"
+    )
+
+    st.plotly_chart(heatmap_fig, width="stretch")
 
     if st.button("Generate AI relationship interpretation", key=f"{name}_cross_ai"):
         st.write(
             ai_generate(
                 f"{name}: Crosstab Analysis",
-                table.to_string(),
+                long_table[["Row Category", "Column Category", "Count", "Percentage"]].to_string(index=False),
                 f"Rows: {row}; Columns: {col}; Sample size: {len(df)}"
             )
         )
@@ -1173,12 +1434,17 @@ def text_lab(df, name):
     st.dataframe(keywords, width="stretch")
 
     if not keywords.empty:
+        keywords["Label"] = keywords["Count"].astype(str)
+
         fig = px.bar(
             keywords,
             x="Keyword",
             y="Count",
+            text="Label",
             title="Top Keywords"
         )
+
+        fig.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig, width="stretch")
 
@@ -1468,20 +1734,30 @@ with tabs[3]:
                 key="cmp_lcol"
             )
 
-            lsum = summary_table(lecturer_df, lcol)
-
-            st.dataframe(lsum, width="stretch")
-
-            st.plotly_chart(
-                px.bar(
-                    lsum,
-                    x="Response",
-                    y="Count",
-                    text="Count",
-                    title="Lecturer responses"
-                ),
-                width="stretch"
+            split_l = st.checkbox(
+                "Split lecturer answers",
+                value=True,
+                key="cmp_l_split"
             )
+
+            if split_l:
+                lsum = split_summary_table(lecturer_df, lcol, ";")
+            else:
+                lsum = summary_table(lecturer_df, lcol)
+
+            st.dataframe(lsum[["Response", "Count", "Percentage"]], width="stretch")
+
+            lfig = px.bar(
+                lsum,
+                x="Response",
+                y="Count",
+                text="Label",
+                title="Lecturer responses"
+            )
+
+            lfig.update_traces(textposition="outside", cliponaxis=False)
+
+            st.plotly_chart(lfig, width="stretch")
 
         with c2:
             scol = st.selectbox(
@@ -1490,20 +1766,30 @@ with tabs[3]:
                 key="cmp_scol"
             )
 
-            ssum = summary_table(student_df, scol)
-
-            st.dataframe(ssum, width="stretch")
-
-            st.plotly_chart(
-                px.bar(
-                    ssum,
-                    x="Response",
-                    y="Count",
-                    text="Count",
-                    title="Student responses"
-                ),
-                width="stretch"
+            split_s = st.checkbox(
+                "Split student answers",
+                value=True,
+                key="cmp_s_split"
             )
+
+            if split_s:
+                ssum = split_summary_table(student_df, scol, ";")
+            else:
+                ssum = summary_table(student_df, scol)
+
+            st.dataframe(ssum[["Response", "Count", "Percentage"]], width="stretch")
+
+            sfig = px.bar(
+                ssum,
+                x="Response",
+                y="Count",
+                text="Label",
+                title="Student responses"
+            )
+
+            sfig.update_traces(textposition="outside", cliponaxis=False)
+
+            st.plotly_chart(sfig, width="stretch")
 
         if st.button("Generate AI comparative analysis"):
             results = f"""
@@ -1511,13 +1797,13 @@ Lecturer question:
 {lcol}
 
 Lecturer results:
-{lsum.to_string(index=False)}
+{lsum[["Response", "Count", "Percentage"]].to_string(index=False)}
 
 Student question:
 {scol}
 
 Student results:
-{ssum.to_string(index=False)}
+{ssum[["Response", "Count", "Percentage"]].to_string(index=False)}
 """
 
             st.write(
