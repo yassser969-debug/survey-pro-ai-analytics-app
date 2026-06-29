@@ -446,6 +446,278 @@ def question_lab(df, name):
         )
 
 
+def multi_variable_chart_lab(df, name):
+    st.markdown(f"### {name} Multi-Variable Chart Lab")
+    st.write("Choose two or more columns, then select the chart type you want.")
+
+    selected_columns = st.multiselect(
+        "Choose two or more columns",
+        df.columns,
+        key=f"{name}_multi_variable_columns"
+    )
+
+    if len(selected_columns) < 2:
+        st.info("Please choose at least two columns.")
+        return
+
+    chart_type = st.selectbox(
+        "Choose chart type",
+        [
+            "Count comparison",
+            "Grouped bar chart",
+            "Stacked bar chart",
+            "Percentage stacked bar chart",
+            "Heatmap between two variables",
+            "Box plot for numeric variables",
+            "Scatter plot for two numeric variables"
+        ],
+        key=f"{name}_multi_variable_chart_type"
+    )
+
+    split_multiple_answers = st.checkbox(
+        "Split multiple answers inside cells",
+        value=False,
+        key=f"{name}_multi_variable_split"
+    )
+
+    separator = st.text_input(
+        "Separator used between answers",
+        value=";",
+        key=f"{name}_multi_variable_separator"
+    )
+
+    chart_df = df[selected_columns].copy()
+
+    if split_multiple_answers:
+        long_rows = []
+
+        for column in selected_columns:
+            for value in chart_df[column].dropna().astype(str):
+                parts = value.split(separator)
+
+                for part in parts:
+                    clean_answer = part.strip()
+
+                    if clean_answer != "":
+                        long_rows.append({
+                            "Question": column,
+                            "Answer": clean_answer
+                        })
+
+        long_df = pd.DataFrame(long_rows)
+
+    else:
+        long_df = chart_df.melt(
+            var_name="Question",
+            value_name="Answer"
+        ).dropna()
+
+        long_df["Answer"] = long_df["Answer"].astype(str).str.strip()
+        long_df = long_df[long_df["Answer"] != ""]
+
+    if long_df.empty:
+        st.warning("No valid data found in the selected columns.")
+        return
+
+    if chart_type == "Count comparison":
+        summary = (
+            long_df
+            .groupby(["Question", "Answer"])
+            .size()
+            .reset_index(name="Count")
+        )
+
+        st.subheader("Summary table")
+        st.dataframe(summary, width="stretch")
+
+        fig = px.bar(
+            summary,
+            x="Question",
+            y="Count",
+            color="Answer",
+            text="Count",
+            title=f"{name}: Count comparison across selected variables"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Grouped bar chart":
+        summary = (
+            long_df
+            .groupby(["Question", "Answer"])
+            .size()
+            .reset_index(name="Count")
+        )
+
+        st.subheader("Summary table")
+        st.dataframe(summary, width="stretch")
+
+        fig = px.bar(
+            summary,
+            x="Answer",
+            y="Count",
+            color="Question",
+            barmode="group",
+            text="Count",
+            title=f"{name}: Grouped bar chart"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Stacked bar chart":
+        summary = (
+            long_df
+            .groupby(["Question", "Answer"])
+            .size()
+            .reset_index(name="Count")
+        )
+
+        st.subheader("Summary table")
+        st.dataframe(summary, width="stretch")
+
+        fig = px.bar(
+            summary,
+            x="Question",
+            y="Count",
+            color="Answer",
+            barmode="stack",
+            text="Count",
+            title=f"{name}: Stacked bar chart"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Percentage stacked bar chart":
+        summary = (
+            long_df
+            .groupby(["Question", "Answer"])
+            .size()
+            .reset_index(name="Count")
+        )
+
+        summary["Percentage"] = (
+            summary.groupby("Question")["Count"]
+            .transform(lambda x: x / x.sum() * 100)
+            .round(1)
+        )
+
+        st.subheader("Percentage summary table")
+        st.dataframe(summary, width="stretch")
+
+        fig = px.bar(
+            summary,
+            x="Question",
+            y="Percentage",
+            color="Answer",
+            barmode="stack",
+            text="Percentage",
+            title=f"{name}: Percentage stacked bar chart"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Heatmap between two variables":
+        row_column = st.selectbox(
+            "Choose row variable",
+            selected_columns,
+            key=f"{name}_heatmap_row"
+        )
+
+        column_column = st.selectbox(
+            "Choose column variable",
+            selected_columns,
+            key=f"{name}_heatmap_column"
+        )
+
+        if row_column == column_column:
+            st.warning("Please choose two different variables.")
+            return
+
+        table = pd.crosstab(
+            df[row_column].fillna("Missing").astype(str),
+            df[column_column].fillna("Missing").astype(str)
+        )
+
+        st.subheader("Crosstab table")
+        st.dataframe(table, width="stretch")
+
+        fig = px.imshow(
+            table,
+            text_auto=True,
+            title=f"{name}: Heatmap of {row_column} vs {column_column}"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Box plot for numeric variables":
+        numeric_df = chart_df.apply(pd.to_numeric, errors="coerce")
+
+        long_numeric = numeric_df.melt(
+            var_name="Question",
+            value_name="Value"
+        ).dropna()
+
+        if long_numeric.empty:
+            st.warning("No numeric values found in the selected columns.")
+            return
+
+        st.subheader("Numeric summary")
+        st.dataframe(numeric_df.describe().T, width="stretch")
+
+        fig = px.box(
+            long_numeric,
+            x="Question",
+            y="Value",
+            title=f"{name}: Box plot for selected numeric variables"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    elif chart_type == "Scatter plot for two numeric variables":
+        if len(selected_columns) != 2:
+            st.warning("For scatter plot, please choose exactly two columns.")
+            return
+
+        x_col = selected_columns[0]
+        y_col = selected_columns[1]
+
+        scatter_df = df[[x_col, y_col]].copy()
+        scatter_df[x_col] = pd.to_numeric(scatter_df[x_col], errors="coerce")
+        scatter_df[y_col] = pd.to_numeric(scatter_df[y_col], errors="coerce")
+        scatter_df = scatter_df.dropna()
+
+        if scatter_df.empty:
+            st.warning("No numeric values found for scatter plot.")
+            return
+
+        fig = px.scatter(
+            scatter_df,
+            x=x_col,
+            y=y_col,
+            title=f"{name}: Scatter plot of {x_col} vs {y_col}"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+    if st.button("Generate AI interpretation for selected variables", key=f"{name}_multi_variable_ai"):
+        ai_context = f"""
+Dataset: {name}
+Selected columns: {selected_columns}
+Chart type: {chart_type}
+
+Preview of analysed data:
+{long_df.head(200).to_string(index=False)}
+"""
+
+        st.write(
+            ai_generate(
+                f"{name}: Multi-variable chart analysis",
+                ai_context,
+                "Interpret the selected variables academically. Explain the main patterns, differences, and limitations."
+            )
+        )
+
+
 def filter_lab(df, name):
     st.markdown(f"### {name} Filter Lab")
 
@@ -509,6 +781,7 @@ def filter_lab(df, name):
                 f"Filter: {filter_col} = {value}. Sample size: {len(filtered_df)}"
             )
         )
+
 
 def yes_no_pattern_lab(df, name):
     st.markdown(f"### {name} Answer Pattern Lab")
@@ -1100,6 +1373,7 @@ with tabs[1]:
             "Overview",
             "Quality",
             "Questions",
+            "Multi Chart",
             "Filters",
             "Answer Pattern",
             "Relationships",
@@ -1117,18 +1391,21 @@ with tabs[1]:
             question_lab(lecturer_df, "Lecturers")
 
         with sub_tabs[3]:
-            filter_lab(lecturer_df, "Lecturers")
+            multi_variable_chart_lab(lecturer_df, "Lecturers")
 
         with sub_tabs[4]:
-            yes_no_pattern_lab(lecturer_df, "Lecturers")
+            filter_lab(lecturer_df, "Lecturers")
 
         with sub_tabs[5]:
-            crosstab_lab(lecturer_df, "Lecturers")
+            yes_no_pattern_lab(lecturer_df, "Lecturers")
 
         with sub_tabs[6]:
-            reliability_lab(lecturer_df, "Lecturers")
+            crosstab_lab(lecturer_df, "Lecturers")
 
         with sub_tabs[7]:
+            reliability_lab(lecturer_df, "Lecturers")
+
+        with sub_tabs[8]:
             text_lab(lecturer_df, "Lecturers")
 
 
@@ -1140,6 +1417,7 @@ with tabs[2]:
             "Overview",
             "Quality",
             "Questions",
+            "Multi Chart",
             "Filters",
             "Answer Pattern",
             "Relationships",
@@ -1157,18 +1435,21 @@ with tabs[2]:
             question_lab(student_df, "Students")
 
         with sub_tabs[3]:
-            filter_lab(student_df, "Students")
+            multi_variable_chart_lab(student_df, "Students")
 
         with sub_tabs[4]:
-            yes_no_pattern_lab(student_df, "Students")
+            filter_lab(student_df, "Students")
 
         with sub_tabs[5]:
-            crosstab_lab(student_df, "Students")
+            yes_no_pattern_lab(student_df, "Students")
 
         with sub_tabs[6]:
-            reliability_lab(student_df, "Students")
+            crosstab_lab(student_df, "Students")
 
         with sub_tabs[7]:
+            reliability_lab(student_df, "Students")
+
+        with sub_tabs[8]:
             text_lab(student_df, "Students")
 
 
