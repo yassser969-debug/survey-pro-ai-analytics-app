@@ -166,12 +166,47 @@ def split_cell_values(value, separator=";"):
     parts = str(value).split(separator)
 
     cleaned = []
+
     for part in parts:
         item = part.strip()
+
         if item != "" and item.lower() != "nan":
             cleaned.append(item)
 
     return cleaned
+
+
+def clean_axis_label(value, variable_name=""):
+    value = str(value).strip()
+
+    try:
+        number = float(value)
+
+        if number.is_integer():
+            number = int(number)
+
+            if "group" in variable_name.lower():
+                return f"Group {number}"
+
+            return str(number)
+
+    except Exception:
+        pass
+
+    return value
+
+
+def make_chart_label(count, percentage, label_style):
+    if label_style == "No labels":
+        return ""
+
+    if label_style == "Count only":
+        return str(count)
+
+    if label_style == "Percentage only":
+        return f"{percentage}%"
+
+    return f"{count}<br>({percentage}%)"
 
 
 def summary_table(df: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -252,7 +287,25 @@ def likely_text_columns(df: pd.DataFrame):
     return cols
 
 
-def create_heatmap_with_labels(table, title):
+def create_heatmap_with_labels(
+    table,
+    title,
+    row_variable_name="Row",
+    column_variable_name="Column",
+    label_style="Count + Percentage"
+):
+    table = table.copy()
+
+    row_labels = [
+        clean_axis_label(value, row_variable_name)
+        for value in table.index
+    ]
+
+    column_labels = [
+        clean_axis_label(value, column_variable_name)
+        for value in table.columns
+    ]
+
     total = table.values.sum()
 
     if total == 0:
@@ -260,23 +313,55 @@ def create_heatmap_with_labels(table, title):
 
     percentages = (table / total * 100).round(1)
 
-    text_labels = table.astype(str) + "<br>(" + percentages.astype(str) + "%)"
+    text_labels = []
+
+    for row_index in table.index:
+        row_text = []
+
+        for column_index in table.columns:
+            count = table.loc[row_index, column_index]
+            percentage = percentages.loc[row_index, column_index]
+            row_text.append(make_chart_label(count, percentage, label_style))
+
+        text_labels.append(row_text)
 
     fig = go.Figure(
         data=go.Heatmap(
             z=table.values,
-            x=table.columns.astype(str),
-            y=table.index.astype(str),
-            text=text_labels.values,
+            x=column_labels,
+            y=row_labels,
+            text=text_labels,
             texttemplate="%{text}",
-            hovertemplate="Row: %{y}<br>Column: %{x}<br>Count: %{z}<extra></extra>"
+            hovertemplate=(
+                f"{row_variable_name}: " + "%{y}<br>"
+                f"{column_variable_name}: " + "%{x}<br>"
+                "Count: %{z}<extra></extra>"
+            )
         )
     )
 
+    y_axis_title = "Group" if "group" in row_variable_name.lower() else row_variable_name
+    x_axis_title = column_variable_name
+
     fig.update_layout(
         title=title,
-        xaxis_title="Column Category",
-        yaxis_title="Row Category"
+        xaxis_title=x_axis_title,
+        yaxis_title=y_axis_title,
+        height=520
+    )
+
+    fig.update_xaxes(
+        type="category",
+        tickmode="array",
+        tickvals=column_labels,
+        ticktext=column_labels
+    )
+
+    fig.update_yaxes(
+        type="category",
+        tickmode="array",
+        tickvals=row_labels,
+        ticktext=row_labels
     )
 
     return fig
@@ -508,6 +593,17 @@ def question_lab(df, name):
         key=f"{name}_ql_separator"
     )
 
+    label_style = st.selectbox(
+        "Chart label style",
+        [
+            "Count + Percentage",
+            "Count only",
+            "Percentage only",
+            "No labels"
+        ],
+        key=f"{name}_ql_label_style"
+    )
+
     if split_answers:
         table = split_summary_table(df, col, separator)
     else:
@@ -516,6 +612,15 @@ def question_lab(df, name):
     if table.empty:
         st.warning("No valid answers found.")
         return
+
+    table["Label"] = table.apply(
+        lambda x: make_chart_label(
+            x["Count"],
+            x["Percentage"],
+            label_style
+        ),
+        axis=1
+    )
 
     st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
 
@@ -528,7 +633,10 @@ def question_lab(df, name):
             title=col
         )
 
-        fig.update_traces(textposition="outside", cliponaxis=False)
+        if label_style == "No labels":
+            fig.update_traces(text=None)
+        else:
+            fig.update_traces(textposition="outside", cliponaxis=False)
 
     else:
         hole = 0.45 if chart == "Donut" else 0
@@ -541,7 +649,14 @@ def question_lab(df, name):
             title=col
         )
 
-        fig.update_traces(textinfo="label+percent+value")
+        if label_style == "No labels":
+            fig.update_traces(textinfo="none")
+        elif label_style == "Count only":
+            fig.update_traces(textinfo="label+value")
+        elif label_style == "Percentage only":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+percent+value")
 
     fig.update_layout(
         xaxis_title="Response",
@@ -602,6 +717,17 @@ def multi_variable_chart_lab(df, name):
         key=f"{name}_multi_variable_separator"
     )
 
+    label_style = st.selectbox(
+        "Chart label style",
+        [
+            "Count + Percentage",
+            "Count only",
+            "Percentage only",
+            "No labels"
+        ],
+        key=f"{name}_multi_variable_label_style"
+    )
+
     chart_df = df[selected_columns].copy()
 
     if split_multiple_answers:
@@ -651,11 +777,13 @@ def multi_variable_chart_lab(df, name):
             .round(1)
         )
 
-        summary["Label"] = (
-            summary["Count"].astype(str)
-            + " ("
-            + summary["Percentage"].astype(str)
-            + "%)"
+        summary["Label"] = summary.apply(
+            lambda x: make_chart_label(
+                x["Count"],
+                x["Percentage"],
+                label_style
+            ),
+            axis=1
         )
 
         st.subheader("Summary table")
@@ -674,7 +802,10 @@ def multi_variable_chart_lab(df, name):
                 title=f"{name}: Count comparison across selected variables"
             )
 
-            fig.update_traces(textposition="inside")
+            if label_style == "No labels":
+                fig.update_traces(text=None)
+            else:
+                fig.update_traces(textposition="inside")
 
         elif chart_type == "Grouped bar chart":
             fig = px.bar(
@@ -687,7 +818,10 @@ def multi_variable_chart_lab(df, name):
                 title=f"{name}: Grouped bar chart"
             )
 
-            fig.update_traces(textposition="outside", cliponaxis=False)
+            if label_style == "No labels":
+                fig.update_traces(text=None)
+            else:
+                fig.update_traces(textposition="outside", cliponaxis=False)
 
         elif chart_type == "Stacked bar chart":
             fig = px.bar(
@@ -700,7 +834,10 @@ def multi_variable_chart_lab(df, name):
                 title=f"{name}: Stacked bar chart"
             )
 
-            fig.update_traces(textposition="inside")
+            if label_style == "No labels":
+                fig.update_traces(text=None)
+            else:
+                fig.update_traces(textposition="inside")
 
         else:
             fig = px.bar(
@@ -713,7 +850,11 @@ def multi_variable_chart_lab(df, name):
                 title=f"{name}: Percentage stacked bar chart"
             )
 
-            fig.update_traces(textposition="inside")
+            if label_style == "No labels":
+                fig.update_traces(text=None)
+            else:
+                fig.update_traces(textposition="inside")
+
             fig.update_yaxes(title="Percentage")
 
         fig.update_layout(
@@ -721,7 +862,8 @@ def multi_variable_chart_lab(df, name):
             yaxis_title="Count / Percentage",
             uniformtext_minsize=9,
             uniformtext_mode="hide",
-            legend_title_text="Answer / Question"
+            legend_title_text="Answer / Question",
+            height=560
         )
 
         st.plotly_chart(fig, width="stretch")
@@ -768,8 +910,8 @@ def multi_variable_chart_lab(df, name):
             for row_value in row_values:
                 for col_value in col_values:
                     heatmap_rows.append({
-                        "Row": row_value,
-                        "Column": col_value
+                        "Row": clean_axis_label(row_value, row_column),
+                        "Column": clean_axis_label(col_value, column_column)
                     })
 
         heatmap_df = pd.DataFrame(heatmap_rows)
@@ -788,7 +930,10 @@ def multi_variable_chart_lab(df, name):
 
         fig = create_heatmap_with_labels(
             table,
-            f"{name}: Heatmap of {row_column} vs {column_column}"
+            f"{name}: Heatmap of {row_column} vs {column_column}",
+            row_variable_name=row_column,
+            column_variable_name=column_column,
+            label_style=label_style
         )
 
         st.plotly_chart(fig, width="stretch")
@@ -916,6 +1061,17 @@ def filter_lab(df, name):
         key=f"{name}_filter_separator"
     )
 
+    label_style = st.selectbox(
+        "Chart label style",
+        [
+            "Count + Percentage",
+            "Count only",
+            "Percentage only",
+            "No labels"
+        ],
+        key=f"{name}_filter_label_style"
+    )
+
     if split_answers:
         table = split_summary_table(filtered_df, analysis_col, separator)
     else:
@@ -924,6 +1080,15 @@ def filter_lab(df, name):
     if table.empty:
         st.warning("No valid answers found.")
         return
+
+    table["Label"] = table.apply(
+        lambda x: make_chart_label(
+            x["Count"],
+            x["Percentage"],
+            label_style
+        ),
+        axis=1
+    )
 
     st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
 
@@ -935,7 +1100,10 @@ def filter_lab(df, name):
         title=f"{analysis_col} | {filter_col}: {value}"
     )
 
-    fig.update_traces(textposition="outside", cliponaxis=False)
+    if label_style == "No labels":
+        fig.update_traces(text=None)
+    else:
+        fig.update_traces(textposition="outside", cliponaxis=False)
 
     st.plotly_chart(fig, width="stretch")
 
@@ -969,6 +1137,17 @@ def yes_no_pattern_lab(df, name):
         "Separator between answers",
         value=";",
         key=f"{name}_answer_pattern_separator"
+    )
+
+    label_style = st.selectbox(
+        "Chart label style",
+        [
+            "Count + Percentage",
+            "Count only",
+            "Percentage only",
+            "No labels"
+        ],
+        key=f"{name}_answer_pattern_label_style"
     )
 
     if not separator:
@@ -1007,11 +1186,13 @@ def yes_no_pattern_lab(df, name):
             counts["Selection Count"] / len(parsed_rows) * 100
         ).round(1)
 
-        counts["Label"] = (
-            counts["Selection Count"].astype(str)
-            + " ("
-            + counts["Percentage of Selections"].astype(str)
-            + "%)"
+        counts["Label"] = counts.apply(
+            lambda x: make_chart_label(
+                x["Selection Count"],
+                x["Percentage of Selections"],
+                label_style
+            ),
+            axis=1
         )
 
         st.subheader("Multiple-response summary")
@@ -1025,7 +1206,10 @@ def yes_no_pattern_lab(df, name):
             title=f"Selected options in: {selected_column}"
         )
 
-        fig.update_traces(textposition="outside", cliponaxis=False)
+        if label_style == "No labels":
+            fig.update_traces(text=None)
+        else:
+            fig.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig, width="stretch")
 
@@ -1111,11 +1295,13 @@ Results:
             first_choice["First Choice Count"] / max(total_first, 1) * 100
         ).round(1)
 
-        first_choice["Label"] = (
-            first_choice["First Choice Count"].astype(str)
-            + " ("
-            + first_choice["Percentage"].astype(str)
-            + "%)"
+        first_choice["Label"] = first_choice.apply(
+            lambda x: make_chart_label(
+                x["First Choice Count"],
+                x["Percentage"],
+                label_style
+            ),
+            axis=1
         )
 
         st.subheader("First-choice summary")
@@ -1129,7 +1315,10 @@ Results:
             title=f"Average ranking position: {selected_column}"
         )
 
-        fig_avg.update_traces(textposition="outside", cliponaxis=False)
+        if label_style == "No labels":
+            fig_avg.update_traces(text=None)
+        else:
+            fig_avg.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig_avg, width="stretch")
 
@@ -1141,7 +1330,10 @@ Results:
             title=f"Most common first-choice options: {selected_column}"
         )
 
-        fig_first.update_traces(textposition="outside", cliponaxis=False)
+        if label_style == "No labels":
+            fig_first.update_traces(text=None)
+        else:
+            fig_first.update_traces(textposition="outside", cliponaxis=False)
 
         st.plotly_chart(fig_first, width="stretch")
 
@@ -1231,6 +1423,17 @@ def crosstab_lab(df, name):
         key=f"{name}_cross_separator"
     )
 
+    label_style = st.selectbox(
+        "Chart label style",
+        [
+            "Count + Percentage",
+            "Count only",
+            "Percentage only",
+            "No labels"
+        ],
+        key=f"{name}_cross_label_style"
+    )
+
     relationship_rows = []
 
     for _, record in df[[row, col]].dropna(how="all").iterrows():
@@ -1250,8 +1453,8 @@ def crosstab_lab(df, name):
         for row_value in row_values:
             for col_value in col_values:
                 relationship_rows.append({
-                    "Row Category": row_value,
-                    "Column Category": col_value
+                    "Row Category": clean_axis_label(row_value, row),
+                    "Column Category": clean_axis_label(col_value, col)
                 })
 
     relationship_df = pd.DataFrame(relationship_rows)
@@ -1286,18 +1489,22 @@ def crosstab_lab(df, name):
         long_table["Count"] / max(total_count, 1) * 100
     ).round(1)
 
-    long_table["Label"] = (
-        long_table["Count"].astype(str)
-        + " ("
-        + long_table["Percentage"].astype(str)
-        + "%)"
+    long_table["Label"] = long_table.apply(
+        lambda x: make_chart_label(
+            x["Count"],
+            x["Percentage"],
+            label_style
+        ),
+        axis=1
     )
 
-    st.subheader("Chart data with percentages")
+    st.subheader("Chart data")
     st.dataframe(
         long_table[["Row Category", "Column Category", "Count", "Percentage"]],
         width="stretch"
     )
+
+    x_axis_title = "Group" if "group" in row.lower() else row
 
     fig = px.bar(
         long_table,
@@ -1309,20 +1516,29 @@ def crosstab_lab(df, name):
         title=f"{row} vs {col}"
     )
 
-    fig.update_traces(textposition="outside", cliponaxis=False)
+    if label_style == "No labels":
+        fig.update_traces(text=None)
+    else:
+        fig.update_traces(textposition="outside", cliponaxis=False)
 
     fig.update_layout(
-        xaxis_title="Row Category",
+        xaxis_title=x_axis_title,
         yaxis_title="Count",
         uniformtext_minsize=9,
-        uniformtext_mode="hide"
+        uniformtext_mode="hide",
+        height=520
     )
+
+    fig.update_xaxes(type="category")
 
     st.plotly_chart(fig, width="stretch")
 
     heatmap_fig = create_heatmap_with_labels(
         table,
-        f"Heatmap: {row} vs {col}"
+        f"Heatmap: {row} vs {col}",
+        row_variable_name=row,
+        column_variable_name=col,
+        label_style=label_style
     )
 
     st.plotly_chart(heatmap_fig, width="stretch")
