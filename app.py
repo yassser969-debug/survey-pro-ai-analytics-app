@@ -1,6 +1,7 @@
 import io
 import re
 from collections import Counter
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -14,7 +15,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="Pro AI Survey Analytics",
+    page_title="Survey Analytics Studio",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -42,6 +43,7 @@ CUSTOM_CSS = """
 
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
+        flex-wrap: wrap;
     }
 
     .stTabs [data-baseweb="tab"] {
@@ -63,6 +65,7 @@ CUSTOM_CSS = """
         border-radius: 22px;
         padding: 22px;
         box-shadow: 0 14px 35px rgba(0,0,0,0.25);
+        min-height: 145px;
     }
 
     .metric-title {
@@ -75,6 +78,7 @@ CUSTOM_CSS = """
         font-size: 2rem;
         font-weight: 800;
         color: #f8fafc;
+        word-break: break-word;
     }
 
     .metric-sub {
@@ -111,8 +115,28 @@ CUSTOM_CSS = """
     .hero-sub {
         font-size: 1.05rem;
         color: #cbd5e1;
-        max-width: 900px;
+        max-width: 950px;
         margin-top: 12px;
+    }
+
+    .file-pill {
+        display: inline-block;
+        margin: 4px 6px 4px 0;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(37,99,235,.18);
+        border: 1px solid rgba(96,165,250,.35);
+        color: #dbeafe;
+        font-size: .85rem;
+        font-weight: 700;
+    }
+
+    .note-box {
+        border-radius: 18px;
+        padding: 16px 18px;
+        border: 1px solid #334155;
+        background: rgba(30, 41, 59, 0.75);
+        color: #cbd5e1;
     }
 </style>
 """
@@ -121,12 +145,12 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 STOPWORDS = set("""
-the and to of in a an is are was were for with on at by from this that these those it as be or if yes no not i you we they he she them their our your about into can could should would there here very more most less also have has had do does did because than then so such using use used student students lecturer lecturers assessment speaking course feedback formative summative learning teaching
+the and to of in a an is are was were for with on at by from this that these those it as be or if yes no not i you we they he she them their our your about into can could should would there here very more most less also have has had do does did because than then so such using use used survey surveys questionnaire questionnaires response responses data dataset file files analysis answer answers question questions
 """.split())
 
 
 # =========================================================
-# Data Cleaning Functions
+# Data Loading and Cleaning
 # =========================================================
 
 def make_unique_columns(columns):
@@ -159,102 +183,52 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def split_cell_values(value, separator=";"):
-    if pd.isna(value):
-        return []
-
-    parts = str(value).split(separator)
-
-    cleaned = []
-
-    for part in parts:
-        item = part.strip()
-
-        if item != "" and item.lower() != "nan":
-            cleaned.append(item)
-
-    return cleaned
+def clean_dataset_name(filename: str) -> str:
+    name = Path(filename).stem
+    name = name.replace("_", " ").replace("-", " ").strip()
+    name = re.sub(r"\s+", " ", name)
+    return name.title() or "Dataset"
 
 
-def clean_axis_label(value, variable_name=""):
-    value = str(value).strip()
+@st.cache_data(show_spinner=False)
+def load_uploaded_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    lower_name = filename.lower()
 
-    try:
-        number = float(value)
+    if lower_name.endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    elif lower_name.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(io.BytesIO(file_bytes))
+    else:
+        raise ValueError("Unsupported file type. Please upload CSV, XLSX, or XLS.")
 
-        if number.is_integer():
-            number = int(number)
-
-            if "group" in variable_name.lower():
-                return f"Group {number}"
-
-            return str(number)
-
-    except Exception:
-        pass
-
-    return value
+    return clean_dataframe(df)
 
 
-def make_chart_label(count, percentage, label_style):
-    if label_style == "No labels":
-        return ""
+def build_datasets(uploaded_files):
+    datasets = {}
 
-    if label_style == "Count only":
-        return str(count)
+    for uploaded_file in uploaded_files:
+        try:
+            file_bytes = uploaded_file.getvalue()
+            df = load_uploaded_file(file_bytes, uploaded_file.name)
+            dataset_name = clean_dataset_name(uploaded_file.name)
 
-    if label_style == "Percentage only":
-        return f"{percentage}%"
+            base_name = dataset_name
+            counter = 2
+            while dataset_name in datasets:
+                dataset_name = f"{base_name} ({counter})"
+                counter += 1
 
-    return f"{count}<br>({percentage}%)"
+            datasets[dataset_name] = {
+                "filename": uploaded_file.name,
+                "df": df,
+                "size": len(file_bytes),
+            }
 
+        except Exception as error:
+            st.sidebar.error(f"Failed to load {uploaded_file.name}: {error}")
 
-def summary_table(df: pd.DataFrame, column: str) -> pd.DataFrame:
-    data = df[column].fillna("Missing").astype(str).str.strip()
-    counts = data.value_counts(dropna=False)
-
-    table = pd.DataFrame({
-        "Response": counts.index,
-        "Count": counts.values,
-        "Percentage": (counts.values / max(len(df), 1) * 100).round(1),
-    })
-
-    table["Label"] = (
-        table["Count"].astype(str)
-        + " ("
-        + table["Percentage"].astype(str)
-        + "%)"
-    )
-
-    return table
-
-
-def split_summary_table(df: pd.DataFrame, column: str, separator=";") -> pd.DataFrame:
-    answers = []
-
-    for value in df[column].dropna():
-        answers.extend(split_cell_values(value, separator))
-
-    if len(answers) == 0:
-        return pd.DataFrame(columns=["Response", "Count", "Percentage", "Label"])
-
-    counts = pd.Series(answers).value_counts().reset_index()
-    counts.columns = ["Response", "Count"]
-
-    total = counts["Count"].sum()
-
-    counts["Percentage"] = (
-        counts["Count"] / max(total, 1) * 100
-    ).round(1)
-
-    counts["Label"] = (
-        counts["Count"].astype(str)
-        + " ("
-        + counts["Percentage"].astype(str)
-        + "%)"
-    )
-
-    return counts
+    return datasets
 
 
 def numeric_columns(df: pd.DataFrame):
@@ -287,93 +261,64 @@ def likely_text_columns(df: pd.DataFrame):
     return cols
 
 
-def create_heatmap_with_labels(
-    table,
-    title,
-    row_variable_name="Row",
-    column_variable_name="Column",
-    label_style="Count + Percentage"
-):
-    table = table.copy()
+def categorical_columns(df: pd.DataFrame, max_unique=30):
+    cols = []
 
-    row_labels = [
-        clean_axis_label(value, row_variable_name)
-        for value in table.index
-    ]
+    for col in df.columns:
+        unique_count = df[col].dropna().astype(str).nunique()
 
-    column_labels = [
-        clean_axis_label(value, column_variable_name)
-        for value in table.columns
-    ]
+        if 2 <= unique_count <= max_unique:
+            cols.append(col)
 
-    total = table.values.sum()
+    return cols
 
-    if total == 0:
-        total = 1
 
-    percentages = (table / total * 100).round(1)
+def coerce_numeric_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
 
-    text_labels = []
 
-    for row_index in table.index:
-        row_text = []
+def split_cell_values(value, separator=";"):
+    if pd.isna(value):
+        return []
 
-        for column_index in table.columns:
-            count = table.loc[row_index, column_index]
-            percentage = percentages.loc[row_index, column_index]
-            row_text.append(make_chart_label(count, percentage, label_style))
+    parts = str(value).split(separator)
+    cleaned = []
 
-        text_labels.append(row_text)
+    for part in parts:
+        item = part.strip()
 
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=table.values,
-            x=column_labels,
-            y=row_labels,
-            text=text_labels,
-            texttemplate="%{text}",
-            hovertemplate=(
-                f"{row_variable_name}: " + "%{y}<br>"
-                f"{column_variable_name}: " + "%{x}<br>"
-                "Count: %{z}<extra></extra>"
-            )
-        )
+        if item != "" and item.lower() != "nan":
+            cleaned.append(item)
+
+    return cleaned
+
+
+def summary_table(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    data = df[column].fillna("Missing").astype(str).str.strip()
+    counts = data.value_counts(dropna=False)
+
+    table = pd.DataFrame({
+        "Response": counts.index,
+        "Count": counts.values,
+        "Percentage": (counts.values / max(len(df), 1) * 100).round(1),
+    })
+
+    table["Label"] = (
+        table["Count"].astype(str)
+        + " ("
+        + table["Percentage"].astype(str)
+        + "%)"
     )
 
-    y_axis_title = "Group" if "group" in row_variable_name.lower() else row_variable_name
-    x_axis_title = column_variable_name
-
-    fig.update_layout(
-        title=title,
-        xaxis_title=x_axis_title,
-        yaxis_title=y_axis_title,
-        height=520
-    )
-
-    fig.update_xaxes(
-        type="category",
-        tickmode="array",
-        tickvals=column_labels,
-        ticktext=column_labels
-    )
-
-    fig.update_yaxes(
-        type="category",
-        tickmode="array",
-        tickvals=row_labels,
-        ticktext=row_labels
-    )
-
-    return fig
+    return table
 
 
 # =========================================================
-# Cronbach Alpha
+# Reliability and Text
 # =========================================================
 
 def cronbach_alpha(data: pd.DataFrame):
     data = data.apply(pd.to_numeric, errors="coerce").dropna()
-
     k = data.shape[1]
 
     if k < 2 or len(data) < 2:
@@ -404,8 +349,19 @@ def alpha_label(alpha):
     return "Poor reliability"
 
 
+def text_keywords(series: pd.Series, top_n=20):
+    text = " ".join(series.dropna().astype(str).tolist()).lower()
+    words = re.findall(r"[a-zA-Z]{3,}", text)
+    words = [word for word in words if word not in STOPWORDS]
+
+    return pd.DataFrame(
+        Counter(words).most_common(top_n),
+        columns=["Keyword", "Count"]
+    )
+
+
 # =========================================================
-# AI Functions
+# AI
 # =========================================================
 
 def get_api_key() -> str:
@@ -434,19 +390,19 @@ def ai_generate(title: str, results: str, context: str = "") -> str:
         return "Add your OpenAI API key in the sidebar first."
 
     if OpenAI is None:
-        return "The OpenAI package is not installed. Run: pip3 install openai"
+        return "The OpenAI package is not installed. Run: pip install openai"
 
     client = OpenAI(api_key=api_key)
 
     prompt = f"""
-You are an academic survey data analyst.
+You are an academic and business survey data analyst.
 Write a concise, credible interpretation of the results below.
 
 Strict rules:
 - Do not invent numbers.
 - Use only the provided results.
 - Mention sample size limitations when relevant.
-- Use formal academic English.
+- Use clear professional English.
 - Separate findings from limitations.
 - Do not overclaim causality.
 - Do not claim statistical significance unless a valid test is provided.
@@ -473,22 +429,7 @@ Context:
 
 
 # =========================================================
-# Text Analysis
-# =========================================================
-
-def text_keywords(series: pd.Series, top_n=20):
-    text = " ".join(series.dropna().astype(str).tolist()).lower()
-    words = re.findall(r"[a-zA-Z]{3,}", text)
-    words = [word for word in words if word not in STOPWORDS]
-
-    return pd.DataFrame(
-        Counter(words).most_common(top_n),
-        columns=["Keyword", "Count"]
-    )
-
-
-# =========================================================
-# UI Helpers
+# UI Components
 # =========================================================
 
 def metric_card(title, value, sub=""):
@@ -498,6 +439,21 @@ def metric_card(title, value, sub=""):
             <div class="metric-title">{title}</div>
             <div class="metric-value">{value}</div>
             <div class="metric-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def hero_section():
+    st.markdown(
+        """
+        <div class="hero">
+            <div class="hero-title">Survey Analytics Studio</div>
+            <div class="hero-sub">
+                Upload one or more CSV or Excel datasets, explore patterns, review data quality,
+                test reliability, inspect open-ended responses, compare datasets, and generate AI-assisted interpretations.
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -514,20 +470,28 @@ def dataset_overview(df, name):
     text_count = len(likely_text_columns(df))
 
     with c1:
-        metric_card("Responses", df.shape[0], "Total rows")
+        metric_card("Rows", df.shape[0], "Total records")
 
     with c2:
-        metric_card("Questions", df.shape[1], "Total columns")
+        metric_card("Columns", df.shape[1], "Available fields")
 
     with c3:
-        metric_card("Numeric items", numeric_count, "Potential Likert / coded items")
+        metric_card("Numeric fields", numeric_count, "Potential scales / metrics")
 
     with c4:
         metric_card("Missing cells", missing, "Blank or unavailable values")
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Data Preview")
-    st.dataframe(df.head(10), width="stretch")
+    st.dataframe(df.head(20), use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("Detected Structure")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Text-like fields", text_count)
+    c2.metric("Categorical fields", len(categorical_columns(df)))
+    c3.metric("Duplicate rows", int(df.duplicated().sum()))
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -547,7 +511,7 @@ def data_quality(df, name):
         ],
     })
 
-    st.dataframe(quality, width="stretch")
+    st.dataframe(quality, use_container_width=True)
 
     fig = px.bar(
         quality.sort_values("Missing %", ascending=False).head(20),
@@ -556,1500 +520,640 @@ def data_quality(df, name):
         text="Missing %",
         title="Top Missingness by Column"
     )
-
     fig.update_traces(textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig, width="stretch")
+    fig.update_layout(height=450)
+    st.plotly_chart(fig, use_container_width=True)
 
 
-# =========================================================
-# Analysis Labs
-# =========================================================
+def questions_lab(df, name):
+    st.markdown(f"### {name} Questions / Fields Explorer")
 
-def question_lab(df, name):
-    st.markdown(f"### {name} Question Lab")
-
-    col = st.selectbox(
-        "Choose a question",
+    selected_column = st.selectbox(
+        "Choose a column",
         df.columns,
-        key=f"{name}_ql_col"
+        key=f"{name}_questions_column"
     )
 
-    chart = st.radio(
-        "Chart type",
-        ["Bar", "Pie", "Donut"],
-        horizontal=True,
-        key=f"{name}_ql_chart"
-    )
+    st.write("**Column type:**", str(df[selected_column].dtype))
+    st.write("**Non-missing values:**", int(df[selected_column].notna().sum()))
+    st.write("**Unique values:**", int(df[selected_column].nunique(dropna=True)))
 
-    split_answers = st.checkbox(
-        "Split multiple answers inside cells",
-        value=True,
-        key=f"{name}_ql_split"
-    )
+    table = summary_table(df, selected_column)
 
-    separator = st.text_input(
-        "Separator between answers",
-        value=";",
-        key=f"{name}_ql_separator"
-    )
+    st.dataframe(table.head(100), use_container_width=True)
 
-    label_style = st.selectbox(
-        "Chart label style",
-        [
-            "Count + Percentage",
-            "Count only",
-            "Percentage only",
-            "No labels"
-        ],
-        key=f"{name}_ql_label_style"
-    )
-
-    if split_answers:
-        table = split_summary_table(df, col, separator)
-    else:
-        table = summary_table(df, col)
-
-    if table.empty:
-        st.warning("No valid answers found.")
-        return
-
-    table["Label"] = table.apply(
-        lambda x: make_chart_label(
-            x["Count"],
-            x["Percentage"],
-            label_style
-        ),
-        axis=1
-    )
-
-    st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
-
-    if chart == "Bar":
+    if len(table) <= 30:
         fig = px.bar(
             table,
             x="Response",
             y="Count",
             text="Label",
-            title=col
+            title=f"Response Distribution — {selected_column}"
         )
-
-        if label_style == "No labels":
-            fig.update_traces(text=None)
-        else:
-            fig.update_traces(textposition="outside", cliponaxis=False)
-
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        hole = 0.45 if chart == "Donut" else 0
+        st.info("This field has many unique values, so a distribution chart may not be useful.")
+
+
+def charts_lab(df, name):
+    st.markdown(f"### {name} Multi Chart Lab")
+
+    chart_type = st.selectbox(
+        "Chart type",
+        [
+            "Categorical bar chart",
+            "Numeric histogram",
+            "Pie chart",
+            "Box plot",
+        ],
+        key=f"{name}_chart_type"
+    )
+
+    numeric_cols = numeric_columns(df)
+    cat_cols = categorical_columns(df, max_unique=60)
+
+    if chart_type == "Categorical bar chart":
+        if not cat_cols:
+            st.info("No suitable categorical columns found.")
+            return
+
+        column = st.selectbox("Column", cat_cols, key=f"{name}_cat_bar")
+        table = summary_table(df, column).head(60)
+
+        fig = px.bar(
+            table,
+            x="Response",
+            y="Count",
+            text="Label",
+            title=f"{column} Distribution"
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif chart_type == "Numeric histogram":
+        if not numeric_cols:
+            st.info("No numeric columns found.")
+            return
+
+        column = st.selectbox("Numeric column", numeric_cols, key=f"{name}_hist")
+        values = coerce_numeric_series(df[column]).dropna()
+
+        fig = px.histogram(values, x=column, title=f"{column} Histogram")
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif chart_type == "Pie chart":
+        if not cat_cols:
+            st.info("No suitable categorical columns found.")
+            return
+
+        column = st.selectbox("Column", cat_cols, key=f"{name}_pie")
+        table = summary_table(df, column).head(12)
 
         fig = px.pie(
             table,
             names="Response",
             values="Count",
-            hole=hole,
-            title=col
+            title=f"{column} Pie Chart"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif chart_type == "Box plot":
+        if not numeric_cols:
+            st.info("No numeric columns found.")
+            return
+
+        y_col = st.selectbox("Numeric column", numeric_cols, key=f"{name}_box_y")
+        group_col = st.selectbox(
+            "Optional grouping column",
+            ["None"] + cat_cols,
+            key=f"{name}_box_group"
         )
 
-        if label_style == "No labels":
-            fig.update_traces(textinfo="none")
-        elif label_style == "Count only":
-            fig.update_traces(textinfo="label+value")
-        elif label_style == "Percentage only":
-            fig.update_traces(textinfo="label+percent")
+        chart_df = df.copy()
+        chart_df[y_col] = coerce_numeric_series(chart_df[y_col])
+
+        if group_col == "None":
+            fig = px.box(chart_df, y=y_col, title=f"{y_col} Box Plot")
         else:
-            fig.update_traces(textinfo="label+percent+value")
+            fig = px.box(chart_df, x=group_col, y=y_col, title=f"{y_col} by {group_col}")
 
-    fig.update_layout(
-        xaxis_title="Response",
-        yaxis_title="Count",
-        uniformtext_minsize=9,
-        uniformtext_mode="hide"
-    )
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.plotly_chart(fig, width="stretch")
 
-    if st.button("Generate AI interpretation", key=f"{name}_ql_ai"):
-        st.write(
-            ai_generate(
-                f"{name}: {col}",
-                table[["Response", "Count", "Percentage"]].to_string(index=False),
-                f"Sample size: {len(df)}"
-            )
-        )
-
-
-def multi_variable_chart_lab(df, name):
-    st.markdown(f"### {name} Multi-Variable Chart Lab")
-    st.write("Choose two or more columns, then select the chart type you want.")
-
-    selected_columns = st.multiselect(
-        "Choose two or more columns",
-        df.columns,
-        key=f"{name}_multi_variable_columns"
-    )
-
-    if len(selected_columns) < 2:
-        st.info("Please choose at least two columns.")
-        return
-
-    chart_type = st.selectbox(
-        "Choose chart type",
-        [
-            "Count comparison",
-            "Grouped bar chart",
-            "Stacked bar chart",
-            "Percentage stacked bar chart",
-            "Heatmap between two variables",
-            "Box plot for numeric variables",
-            "Scatter plot for two numeric variables"
-        ],
-        key=f"{name}_multi_variable_chart_type"
-    )
-
-    split_multiple_answers = st.checkbox(
-        "Split multiple answers inside cells",
-        value=True,
-        key=f"{name}_multi_variable_split"
-    )
-
-    separator = st.text_input(
-        "Separator used between answers",
-        value=";",
-        key=f"{name}_multi_variable_separator"
-    )
-
-    label_style = st.selectbox(
-        "Chart label style",
-        [
-            "Count + Percentage",
-            "Count only",
-            "Percentage only",
-            "No labels"
-        ],
-        key=f"{name}_multi_variable_label_style"
-    )
-
-    chart_df = df[selected_columns].copy()
-
-    if split_multiple_answers:
-        long_rows = []
-
-        for column in selected_columns:
-            for value in chart_df[column].dropna():
-                parts = split_cell_values(value, separator)
-
-                for part in parts:
-                    long_rows.append({
-                        "Question": column,
-                        "Answer": part
-                    })
-
-        long_df = pd.DataFrame(long_rows)
-
-    else:
-        long_df = chart_df.melt(
-            var_name="Question",
-            value_name="Answer"
-        ).dropna()
-
-        long_df["Answer"] = long_df["Answer"].astype(str).str.strip()
-        long_df = long_df[long_df["Answer"] != ""]
-
-    if long_df.empty:
-        st.warning("No valid data found in the selected columns.")
-        return
-
-    if chart_type in [
-        "Count comparison",
-        "Grouped bar chart",
-        "Stacked bar chart",
-        "Percentage stacked bar chart"
-    ]:
-        summary = (
-            long_df
-            .groupby(["Question", "Answer"])
-            .size()
-            .reset_index(name="Count")
-        )
-
-        summary["Percentage"] = (
-            summary.groupby("Question")["Count"]
-            .transform(lambda x: x / x.sum() * 100)
-            .round(1)
-        )
-
-        summary["Label"] = summary.apply(
-            lambda x: make_chart_label(
-                x["Count"],
-                x["Percentage"],
-                label_style
-            ),
-            axis=1
-        )
-
-        st.subheader("Summary table")
-        st.dataframe(
-            summary[["Question", "Answer", "Count", "Percentage"]],
-            width="stretch"
-        )
-
-        if chart_type == "Count comparison":
-            fig = px.bar(
-                summary,
-                x="Question",
-                y="Count",
-                color="Answer",
-                text="Label",
-                title=f"{name}: Count comparison across selected variables"
-            )
-
-            if label_style == "No labels":
-                fig.update_traces(text=None)
-            else:
-                fig.update_traces(textposition="inside")
-
-        elif chart_type == "Grouped bar chart":
-            fig = px.bar(
-                summary,
-                x="Answer",
-                y="Count",
-                color="Question",
-                barmode="group",
-                text="Label",
-                title=f"{name}: Grouped bar chart"
-            )
-
-            if label_style == "No labels":
-                fig.update_traces(text=None)
-            else:
-                fig.update_traces(textposition="outside", cliponaxis=False)
-
-        elif chart_type == "Stacked bar chart":
-            fig = px.bar(
-                summary,
-                x="Question",
-                y="Count",
-                color="Answer",
-                barmode="stack",
-                text="Label",
-                title=f"{name}: Stacked bar chart"
-            )
-
-            if label_style == "No labels":
-                fig.update_traces(text=None)
-            else:
-                fig.update_traces(textposition="inside")
-
-        else:
-            fig = px.bar(
-                summary,
-                x="Question",
-                y="Percentage",
-                color="Answer",
-                barmode="stack",
-                text="Label",
-                title=f"{name}: Percentage stacked bar chart"
-            )
-
-            if label_style == "No labels":
-                fig.update_traces(text=None)
-            else:
-                fig.update_traces(textposition="inside")
-
-            fig.update_yaxes(title="Percentage")
-
-        fig.update_layout(
-            xaxis_title="Question / Answer",
-            yaxis_title="Count / Percentage",
-            uniformtext_minsize=9,
-            uniformtext_mode="hide",
-            legend_title_text="Answer / Question",
-            height=560
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Heatmap between two variables":
-        row_column = st.selectbox(
-            "Choose row variable",
-            selected_columns,
-            key=f"{name}_heatmap_row"
-        )
-
-        column_column = st.selectbox(
-            "Choose column variable",
-            selected_columns,
-            key=f"{name}_heatmap_column"
-        )
-
-        if row_column == column_column:
-            st.warning("Please choose two different variables.")
-            return
-
-        split_heatmap = st.checkbox(
-            "Split answers in heatmap variables",
-            value=True,
-            key=f"{name}_heatmap_split"
-        )
-
-        heatmap_rows = []
-
-        for _, record in df[[row_column, column_column]].dropna(how="all").iterrows():
-            row_raw = record[row_column]
-            col_raw = record[column_column]
-
-            if pd.isna(row_raw) or pd.isna(col_raw):
-                continue
-
-            if split_heatmap:
-                row_values = split_cell_values(row_raw, separator)
-                col_values = split_cell_values(col_raw, separator)
-            else:
-                row_values = [str(row_raw).strip()]
-                col_values = [str(col_raw).strip()]
-
-            for row_value in row_values:
-                for col_value in col_values:
-                    heatmap_rows.append({
-                        "Row": clean_axis_label(row_value, row_column),
-                        "Column": clean_axis_label(col_value, column_column)
-                    })
-
-        heatmap_df = pd.DataFrame(heatmap_rows)
-
-        if heatmap_df.empty:
-            st.warning("No valid data found for heatmap.")
-            return
-
-        table = pd.crosstab(
-            heatmap_df["Row"],
-            heatmap_df["Column"]
-        )
-
-        st.subheader("Crosstab table")
-        st.dataframe(table, width="stretch")
-
-        fig = create_heatmap_with_labels(
-            table,
-            f"{name}: Heatmap of {row_column} vs {column_column}",
-            row_variable_name=row_column,
-            column_variable_name=column_column,
-            label_style=label_style
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Box plot for numeric variables":
-        numeric_df = chart_df.apply(pd.to_numeric, errors="coerce")
-
-        long_numeric = numeric_df.melt(
-            var_name="Question",
-            value_name="Value"
-        ).dropna()
-
-        if long_numeric.empty:
-            st.warning("No numeric values found in the selected columns.")
-            return
-
-        st.subheader("Numeric summary")
-        st.dataframe(numeric_df.describe().T, width="stretch")
-
-        fig = px.box(
-            long_numeric,
-            x="Question",
-            y="Value",
-            points="all",
-            title=f"{name}: Box plot for selected numeric variables"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    elif chart_type == "Scatter plot for two numeric variables":
-        if len(selected_columns) != 2:
-            st.warning("For scatter plot, please choose exactly two columns.")
-            return
-
-        x_col = selected_columns[0]
-        y_col = selected_columns[1]
-
-        scatter_df = df[[x_col, y_col]].copy()
-        scatter_df[x_col] = pd.to_numeric(scatter_df[x_col], errors="coerce")
-        scatter_df[y_col] = pd.to_numeric(scatter_df[y_col], errors="coerce")
-        scatter_df = scatter_df.dropna()
-
-        if scatter_df.empty:
-            st.warning("No numeric values found for scatter plot.")
-            return
-
-        fig = px.scatter(
-            scatter_df,
-            x=x_col,
-            y=y_col,
-            title=f"{name}: Scatter plot of {x_col} vs {y_col}"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    if st.button("Generate AI interpretation for selected variables", key=f"{name}_multi_variable_ai"):
-        ai_context = f"""
-Dataset: {name}
-Selected columns: {selected_columns}
-Chart type: {chart_type}
-
-Preview of analysed data:
-{long_df.head(200).to_string(index=False)}
-"""
-
-        st.write(
-            ai_generate(
-                f"{name}: Multi-variable chart analysis",
-                ai_context,
-                "Interpret the selected variables academically. Explain the main patterns, differences, percentages, and limitations."
-            )
-        )
-
-
-def filter_lab(df, name):
+def filters_lab(df, name):
     st.markdown(f"### {name} Filter Lab")
 
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        filter_col = st.selectbox(
-            "Filter variable",
-            df.columns,
-            key=f"{name}_filter_col"
-        )
-
-    values = ["All"] + sorted(
-        df[filter_col].dropna().astype(str).unique().tolist()
-    )
-
-    with c2:
-        value = st.selectbox(
-            "Filter value",
-            values,
-            key=f"{name}_filter_value"
-        )
-
-    with c3:
-        analysis_col = st.selectbox(
-            "Question to analyse",
-            df.columns,
-            key=f"{name}_filter_analysis"
-        )
-
-    if value == "All":
-        filtered_df = df.copy()
-    else:
-        filtered_df = df[df[filter_col].astype(str) == str(value)]
-
-    st.info(f"Filtered sample size: {len(filtered_df)}")
-
-    if len(filtered_df) == 0:
-        st.warning("No records match this filter.")
-        return
-
-    split_answers = st.checkbox(
-        "Split multiple answers in analysed question",
-        value=True,
-        key=f"{name}_filter_split"
-    )
-
-    separator = st.text_input(
-        "Separator between answers",
-        value=";",
-        key=f"{name}_filter_separator"
-    )
-
-    label_style = st.selectbox(
-        "Chart label style",
-        [
-            "Count + Percentage",
-            "Count only",
-            "Percentage only",
-            "No labels"
-        ],
-        key=f"{name}_filter_label_style"
-    )
-
-    if split_answers:
-        table = split_summary_table(filtered_df, analysis_col, separator)
-    else:
-        table = summary_table(filtered_df, analysis_col)
-
-    if table.empty:
-        st.warning("No valid answers found.")
-        return
-
-    table["Label"] = table.apply(
-        lambda x: make_chart_label(
-            x["Count"],
-            x["Percentage"],
-            label_style
-        ),
-        axis=1
-    )
-
-    st.dataframe(table[["Response", "Count", "Percentage"]], width="stretch")
-
-    fig = px.bar(
-        table,
-        x="Response",
-        y="Count",
-        text="Label",
-        title=f"{analysis_col} | {filter_col}: {value}"
-    )
-
-    if label_style == "No labels":
-        fig.update_traces(text=None)
-    else:
-        fig.update_traces(textposition="outside", cliponaxis=False)
-
-    st.plotly_chart(fig, width="stretch")
-
-    if st.button("Generate AI filtered interpretation", key=f"{name}_filter_ai"):
-        st.write(
-            ai_generate(
-                f"{name}: Filtered Analysis",
-                table[["Response", "Count", "Percentage"]].to_string(index=False),
-                f"Filter: {filter_col} = {value}. Sample size: {len(filtered_df)}"
-            )
-        )
-
-
-def yes_no_pattern_lab(df, name):
-    st.markdown(f"### {name} Answer Pattern Lab")
-
-    analysis_type = st.radio(
-        "Analysis type",
-        ["Multiple-response count", "Ranking / ordered preference"],
-        horizontal=True,
-        key=f"{name}_answer_pattern_type"
-    )
-
-    selected_column = st.selectbox(
-        "Choose a question",
+    filter_col = st.selectbox(
+        "Filter column",
         df.columns,
-        key=f"{name}_answer_pattern_column"
+        key=f"{name}_filter_col"
     )
 
-    separator = st.text_input(
-        "Separator between answers",
-        value=";",
-        key=f"{name}_answer_pattern_separator"
+    values = df[filter_col].dropna().astype(str).unique().tolist()
+
+    selected_values = st.multiselect(
+        "Filter values",
+        sorted(values),
+        key=f"{name}_filter_values"
     )
 
-    label_style = st.selectbox(
-        "Chart label style",
+    filtered_df = df.copy()
+
+    if selected_values:
+        filtered_df = filtered_df[filtered_df[filter_col].astype(str).isin(selected_values)]
+
+    st.write(f"Filtered rows: **{len(filtered_df)}** out of **{len(df)}**")
+    st.dataframe(filtered_df.head(100), use_container_width=True)
+
+
+def relationships_lab(df, name):
+    st.markdown(f"### {name} Relationships")
+
+    numeric_cols = numeric_columns(df)
+    cat_cols = categorical_columns(df, max_unique=40)
+
+    relationship_type = st.selectbox(
+        "Relationship type",
         [
-            "Count + Percentage",
-            "Count only",
-            "Percentage only",
-            "No labels"
+            "Numeric vs Numeric",
+            "Categorical crosstab",
+            "Numeric by Category",
         ],
-        key=f"{name}_answer_pattern_label_style"
+        key=f"{name}_relationship_type"
     )
 
-    if not separator:
-        st.warning("Enter the separator used between answers, for example ;")
-        return
-
-    responses = df[selected_column].dropna().astype(str)
-
-    parsed_rows = []
-
-    for response in responses:
-        clean_parts = split_cell_values(response, separator)
-
-        if clean_parts:
-            parsed_rows.append(clean_parts)
-
-    if len(parsed_rows) == 0:
-        st.warning("No answers found after splitting this column.")
-        return
-
-    if analysis_type == "Multiple-response count":
-        all_answers = []
-
-        for row in parsed_rows:
-            for answer in row:
-                all_answers.append(answer)
-
-        counts = pd.Series(all_answers).value_counts().reset_index()
-        counts.columns = ["Answer Option", "Selection Count"]
-
-        counts["Percentage of Selections"] = (
-            counts["Selection Count"] / counts["Selection Count"].sum() * 100
-        ).round(1)
-
-        counts["Percentage of Respondents"] = (
-            counts["Selection Count"] / len(parsed_rows) * 100
-        ).round(1)
-
-        counts["Label"] = counts.apply(
-            lambda x: make_chart_label(
-                x["Selection Count"],
-                x["Percentage of Selections"],
-                label_style
-            ),
-            axis=1
-        )
-
-        st.subheader("Multiple-response summary")
-        st.dataframe(counts, width="stretch")
-
-        fig = px.bar(
-            counts,
-            x="Answer Option",
-            y="Selection Count",
-            text="Label",
-            title=f"Selected options in: {selected_column}"
-        )
-
-        if label_style == "No labels":
-            fig.update_traces(text=None)
-        else:
-            fig.update_traces(textposition="outside", cliponaxis=False)
-
-        st.plotly_chart(fig, width="stretch")
-
-        st.write(f"Valid respondents: **{len(parsed_rows)}**")
-        st.write(f"Total selections: **{len(all_answers)}**")
-        st.write(f"Unique answer options: **{counts.shape[0]}**")
-
-        if st.button("Generate AI multiple-response interpretation", key=f"{name}_multi_response_ai"):
-            ai_context = f"""
-Dataset: {name}
-Question: {selected_column}
-Separator used: {separator}
-Valid respondents: {len(parsed_rows)}
-Total selections: {len(all_answers)}
-Unique answer options: {counts.shape[0]}
-
-Results:
-{counts.to_string(index=False)}
-"""
-
-            st.write(
-                ai_generate(
-                    f"{name}: Multiple-response analysis",
-                    ai_context,
-                    "Interpret the most frequently selected options. Explain that respondents could select more than one answer."
-                )
-            )
-
-    else:
-        ranking_records = []
-
-        for respondent_id, row in enumerate(parsed_rows, start=1):
-            for position, answer in enumerate(row, start=1):
-                ranking_records.append({
-                    "Respondent": respondent_id,
-                    "Answer Option": answer,
-                    "Rank Position": position
-                })
-
-        ranking_df = pd.DataFrame(ranking_records)
-
-        rank_summary = (
-            ranking_df
-            .groupby("Answer Option")
-            .agg(
-                Times_Selected=("Answer Option", "count"),
-                Average_Rank=("Rank Position", "mean"),
-                Best_Rank=("Rank Position", "min"),
-                Worst_Rank=("Rank Position", "max")
-            )
-            .reset_index()
-        )
-
-        rank_summary["Average_Rank"] = rank_summary["Average_Rank"].round(2)
-
-        rank_summary = rank_summary.sort_values(
-            by=["Average_Rank", "Times_Selected"],
-            ascending=[True, False]
-        )
-
-        st.subheader("Ranking summary")
-        st.write("Lower Average Rank means higher importance.")
-        st.dataframe(rank_summary, width="stretch")
-
-        position_table = pd.crosstab(
-            ranking_df["Answer Option"],
-            ranking_df["Rank Position"]
-        )
-
-        st.subheader("Rank position table")
-        st.dataframe(position_table, width="stretch")
-
-        first_choice = (
-            ranking_df[ranking_df["Rank Position"] == 1]["Answer Option"]
-            .value_counts()
-            .reset_index()
-        )
-
-        first_choice.columns = ["Answer Option", "First Choice Count"]
-
-        total_first = first_choice["First Choice Count"].sum()
-        first_choice["Percentage"] = (
-            first_choice["First Choice Count"] / max(total_first, 1) * 100
-        ).round(1)
-
-        first_choice["Label"] = first_choice.apply(
-            lambda x: make_chart_label(
-                x["First Choice Count"],
-                x["Percentage"],
-                label_style
-            ),
-            axis=1
-        )
-
-        st.subheader("First-choice summary")
-        st.dataframe(first_choice, width="stretch")
-
-        fig_avg = px.bar(
-            rank_summary,
-            x="Answer Option",
-            y="Average_Rank",
-            text="Average_Rank",
-            title=f"Average ranking position: {selected_column}"
-        )
-
-        if label_style == "No labels":
-            fig_avg.update_traces(text=None)
-        else:
-            fig_avg.update_traces(textposition="outside", cliponaxis=False)
-
-        st.plotly_chart(fig_avg, width="stretch")
-
-        fig_first = px.bar(
-            first_choice,
-            x="Answer Option",
-            y="First Choice Count",
-            text="Label",
-            title=f"Most common first-choice options: {selected_column}"
-        )
-
-        if label_style == "No labels":
-            fig_first.update_traces(text=None)
-        else:
-            fig_first.update_traces(textposition="outside", cliponaxis=False)
-
-        st.plotly_chart(fig_first, width="stretch")
-
-        full_orders = []
-
-        for row in parsed_rows:
-            full_orders.append(" > ".join(row))
-
-        order_summary = pd.Series(full_orders).value_counts().reset_index()
-        order_summary.columns = ["Full Ranking Order", "Count"]
-
-        st.subheader("Most repeated full ranking orders")
-        st.dataframe(order_summary, width="stretch")
-
-        st.write(f"Valid respondents: **{len(parsed_rows)}**")
-        st.write(f"Unique full ranking orders: **{order_summary.shape[0]}**")
-
-        if st.button("Generate AI ranking interpretation", key=f"{name}_ranking_ai"):
-            ai_context = f"""
-Dataset: {name}
-Question: {selected_column}
-Separator used: {separator}
-Valid respondents: {len(parsed_rows)}
-
-Ranking summary:
-{rank_summary.to_string(index=False)}
-
-Rank position table:
-{position_table.to_string()}
-
-First-choice summary:
-{first_choice.to_string(index=False)}
-
-Most repeated full ranking orders:
-{order_summary.head(10).to_string(index=False)}
-"""
-
-            st.write(
-                ai_generate(
-                    f"{name}: Ranking preference analysis",
-                    ai_context,
-                    "Interpret the ranking order. Explain that lower average rank indicates higher perceived importance. Mention first-choice patterns and repeated ranking orders."
-                )
-            )
-
-
-def crosstab_lab(df, name):
-    st.markdown(f"### {name} Relationship Lab")
-
-    safe_options = [
-        column for column in df.columns
-        if column.lower() not in ["id", "id_2", "unnamed"]
-    ]
-
-    if len(safe_options) < 2:
-        safe_options = list(df.columns)
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        row = st.selectbox(
-            "Rows",
-            safe_options,
-            key=f"{name}_cross_row"
-        )
-
-    with c2:
-        col = st.selectbox(
-            "Columns",
-            safe_options,
-            key=f"{name}_cross_col"
-        )
-
-    if row == col:
-        st.warning("Please select two different variables for the relationship analysis.")
-        return
-
-    split_answers = st.checkbox(
-        "Split multiple answers inside selected variables",
-        value=True,
-        key=f"{name}_cross_split"
-    )
-
-    separator = st.text_input(
-        "Separator used between answers",
-        value=";",
-        key=f"{name}_cross_separator"
-    )
-
-    label_style = st.selectbox(
-        "Chart label style",
-        [
-            "Count + Percentage",
-            "Count only",
-            "Percentage only",
-            "No labels"
-        ],
-        key=f"{name}_cross_label_style"
-    )
-
-    relationship_rows = []
-
-    for _, record in df[[row, col]].dropna(how="all").iterrows():
-        row_value_raw = record[row]
-        col_value_raw = record[col]
-
-        if pd.isna(row_value_raw) or pd.isna(col_value_raw):
-            continue
-
-        if split_answers:
-            row_values = split_cell_values(row_value_raw, separator)
-            col_values = split_cell_values(col_value_raw, separator)
-        else:
-            row_values = [str(row_value_raw).strip()]
-            col_values = [str(col_value_raw).strip()]
-
-        for row_value in row_values:
-            for col_value in col_values:
-                relationship_rows.append({
-                    "Row Category": clean_axis_label(row_value, row),
-                    "Column Category": clean_axis_label(col_value, col)
-                })
-
-    relationship_df = pd.DataFrame(relationship_rows)
-
-    if relationship_df.empty:
-        st.warning("No valid relationship data found.")
-        return
-
-    table = pd.crosstab(
-        relationship_df["Row Category"],
-        relationship_df["Column Category"]
-    )
-
-    st.subheader("Crosstab table")
-    st.dataframe(table, width="stretch")
-
-    long_table = (
-        table
-        .reset_index()
-        .melt(
-            id_vars="Row Category",
-            var_name="Column Category",
-            value_name="Count"
-        )
-    )
-
-    long_table = long_table[long_table["Count"] > 0]
-
-    total_count = long_table["Count"].sum()
-
-    long_table["Percentage"] = (
-        long_table["Count"] / max(total_count, 1) * 100
-    ).round(1)
-
-    long_table["Label"] = long_table.apply(
-        lambda x: make_chart_label(
-            x["Count"],
-            x["Percentage"],
-            label_style
-        ),
-        axis=1
-    )
-
-    st.subheader("Chart data")
-    st.dataframe(
-        long_table[["Row Category", "Column Category", "Count", "Percentage"]],
-        width="stretch"
-    )
-
-    x_axis_title = "Group" if "group" in row.lower() else row
-
-    fig = px.bar(
-        long_table,
-        x="Row Category",
-        y="Count",
-        color="Column Category",
-        barmode="group",
-        text="Label",
-        title=f"{row} vs {col}"
-    )
-
-    if label_style == "No labels":
-        fig.update_traces(text=None)
-    else:
-        fig.update_traces(textposition="outside", cliponaxis=False)
-
-    fig.update_layout(
-        xaxis_title=x_axis_title,
-        yaxis_title="Count",
-        uniformtext_minsize=9,
-        uniformtext_mode="hide",
-        height=520
-    )
-
-    fig.update_xaxes(type="category")
-
-    st.plotly_chart(fig, width="stretch")
-
-    heatmap_fig = create_heatmap_with_labels(
-        table,
-        f"Heatmap: {row} vs {col}",
-        row_variable_name=row,
-        column_variable_name=col,
-        label_style=label_style
-    )
-
-    st.plotly_chart(heatmap_fig, width="stretch")
-
-    if st.button("Generate AI relationship interpretation", key=f"{name}_cross_ai"):
-        st.write(
-            ai_generate(
-                f"{name}: Crosstab Analysis",
-                long_table[["Row Category", "Column Category", "Count", "Percentage"]].to_string(index=False),
-                f"Rows: {row}; Columns: {col}; Sample size: {len(df)}"
-            )
-        )
+    if relationship_type == "Numeric vs Numeric":
+        if len(numeric_cols) < 2:
+            st.info("Need at least two numeric columns.")
+            return
+
+        x_col = st.selectbox("X-axis", numeric_cols, key=f"{name}_rel_x")
+        y_options = [col for col in numeric_cols if col != x_col]
+        y_col = st.selectbox("Y-axis", y_options, key=f"{name}_rel_y")
+
+        chart_df = df[[x_col, y_col]].copy()
+        chart_df[x_col] = coerce_numeric_series(chart_df[x_col])
+        chart_df[y_col] = coerce_numeric_series(chart_df[y_col])
+        chart_df = chart_df.dropna()
+
+        fig = px.scatter(chart_df, x=x_col, y=y_col, trendline="ols", title=f"{x_col} vs {y_col}")
+        st.plotly_chart(fig, use_container_width=True)
+
+        if len(chart_df) >= 3:
+            corr = chart_df[x_col].corr(chart_df[y_col])
+            st.metric("Pearson correlation", round(corr, 3))
+
+    elif relationship_type == "Categorical crosstab":
+        if len(cat_cols) < 2:
+            st.info("Need at least two categorical columns.")
+            return
+
+        row_col = st.selectbox("Rows", cat_cols, key=f"{name}_cross_row")
+        col_options = [col for col in cat_cols if col != row_col]
+        col_col = st.selectbox("Columns", col_options, key=f"{name}_cross_col")
+
+        table = pd.crosstab(df[row_col].fillna("Missing"), df[col_col].fillna("Missing"))
+        st.dataframe(table, use_container_width=True)
+
+        fig = px.imshow(table, text_auto=True, title=f"{row_col} by {col_col}")
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif relationship_type == "Numeric by Category":
+        if not numeric_cols or not cat_cols:
+            st.info("Need at least one numeric column and one categorical column.")
+            return
+
+        num_col = st.selectbox("Numeric column", numeric_cols, key=f"{name}_num_by_cat_num")
+        cat_col = st.selectbox("Category column", cat_cols, key=f"{name}_num_by_cat_cat")
+
+        chart_df = df[[num_col, cat_col]].copy()
+        chart_df[num_col] = coerce_numeric_series(chart_df[num_col])
+        chart_df = chart_df.dropna()
+
+        fig = px.box(chart_df, x=cat_col, y=num_col, title=f"{num_col} by {cat_col}")
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def reliability_lab(df, name):
-    st.markdown(f"### {name} Reliability Lab")
+    st.markdown(f"### {name} Reliability Analysis")
 
-    nums = numeric_columns(df)
-    default = nums[:8]
+    numeric_cols = numeric_columns(df)
 
-    selected = st.multiselect(
-        "Select Likert-scale items",
-        nums,
-        default=default,
+    if len(numeric_cols) < 2:
+        st.info("Need at least two numeric columns for Cronbach’s alpha.")
+        return
+
+    selected_cols = st.multiselect(
+        "Select numeric columns for reliability analysis",
+        numeric_cols,
+        default=numeric_cols[:min(6, len(numeric_cols))],
         key=f"{name}_alpha_cols"
     )
 
-    if len(selected) < 2:
-        st.info("Select at least two numeric items.")
+    if len(selected_cols) < 2:
+        st.info("Select at least two numeric columns.")
         return
 
-    alpha, n, k = cronbach_alpha(df[selected])
+    alpha, valid_rows, item_count = cronbach_alpha(df[selected_cols])
 
     c1, c2, c3 = st.columns(3)
+    c1.metric("Cronbach’s Alpha", "N/A" if alpha is None else round(alpha, 3))
+    c2.metric("Valid rows", valid_rows)
+    c3.metric("Items", item_count)
 
-    with c1:
-        metric_card(
-            "Cronbach's Alpha",
-            "N/A" if alpha is None else round(alpha, 3),
-            "Internal consistency"
-        )
+    st.write("**Interpretation:**", alpha_label(alpha))
 
-    with c2:
-        metric_card(
-            "Reliability",
-            alpha_label(alpha),
-            "Interpretation"
-        )
-
-    with c3:
-        metric_card(
-            "Valid responses",
-            n,
-            f"Items selected: {k}"
-        )
-
-    corr = df[selected].apply(pd.to_numeric, errors="coerce").corr().round(2)
+    corr_df = df[selected_cols].apply(pd.to_numeric, errors="coerce").corr()
 
     fig = px.imshow(
-        corr,
+        corr_df,
         text_auto=True,
-        title="Inter-item Correlation Heatmap"
+        title="Inter-item Correlation Heatmap",
+        zmin=-1,
+        zmax=1,
     )
-
-    st.plotly_chart(fig, width="stretch")
-
-    if st.button("Generate AI reliability interpretation", key=f"{name}_alpha_ai"):
-        result = f"""
-Alpha: {alpha}
-Interpretation: {alpha_label(alpha)}
-Valid responses: {n}
-Items: {selected}
-"""
-        st.write(
-            ai_generate(
-                f"{name}: Reliability Analysis",
-                result,
-                "Interpret Cronbach's Alpha carefully and avoid overclaiming."
-            )
-        )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def text_lab(df, name):
-    st.markdown(f"### {name} Text Response Lab")
+    st.markdown(f"### {name} Text Analysis")
 
-    candidates = likely_text_columns(df)
+    text_cols = likely_text_columns(df)
 
-    if not candidates:
-        st.info("No strong text-response columns detected. You can still choose from all columns.")
-        candidates = list(df.columns)
+    if not text_cols:
+        st.info("No likely open-text columns found. You can still choose from all columns below.")
+        text_cols = list(df.columns)
 
-    col = st.selectbox(
-        "Choose text/open-ended question",
-        candidates,
+    selected_col = st.selectbox(
+        "Select text column",
+        text_cols,
         key=f"{name}_text_col"
     )
 
-    s = df[col].dropna().astype(str)
+    keywords = text_keywords(df[selected_col], top_n=25)
 
-    st.write(f"Text responses: {len(s)}")
-
-    st.dataframe(
-        pd.DataFrame({"Response": s.head(50)}),
-        width="stretch"
-    )
-
-    keywords = text_keywords(s)
-
-    st.dataframe(keywords, width="stretch")
-
-    if not keywords.empty:
-        keywords["Label"] = keywords["Count"].astype(str)
-
+    if keywords.empty:
+        st.info("No keywords found.")
+    else:
+        st.dataframe(keywords, use_container_width=True)
         fig = px.bar(
-            keywords,
+            keywords.head(20),
             x="Keyword",
             y="Count",
-            text="Label",
-            title="Top Keywords"
+            text="Count",
+            title=f"Top Keywords — {selected_col}"
         )
-
         fig.update_traces(textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.plotly_chart(fig, width="stretch")
+    sample_responses = df[selected_col].dropna().astype(str).head(30)
 
-    if st.button("Generate AI text-theme analysis", key=f"{name}_text_ai"):
-        sample = "\n".join(s.head(30).tolist())
+    st.markdown("#### Sample responses")
+    st.dataframe(pd.DataFrame({"Response": sample_responses}), use_container_width=True)
 
-        st.write(
-            ai_generate(
-                f"{name}: Text Response Analysis",
-                sample,
-                "Identify themes only from the provided responses."
-            )
-        )
+    if st.button("Generate AI interpretation", key=f"{name}_text_ai"):
+        result_text = keywords.to_string(index=False) if not keywords.empty else "No keywords found."
+        context = "\n".join(sample_responses.tolist()[:20])
+        st.write(ai_generate(f"Text analysis for {name} - {selected_col}", result_text, context))
 
 
-# =========================================================
-# Export
-# =========================================================
-
-def safe_sheet_name(name):
-    invalid_chars = ["[", "]", ":", "*", "?", "/", "\\"]
-
-    name = str(name)
-
-    for char in invalid_chars:
-        name = name.replace(char, "_")
-
-    name = name.strip()
-
-    if not name:
-        name = "Sheet"
-
-    return name[:31]
-
-
-def export_report(datasets):
-    output = io.BytesIO()
-    used_sheet_names = set()
-
-    def unique_sheet_name(raw_name):
-        base_name = safe_sheet_name(raw_name)
-        sheet_name = base_name
-        counter = 1
-
-        while sheet_name in used_sheet_names:
-            suffix = f"_{counter}"
-            sheet_name = safe_sheet_name(base_name[:31 - len(suffix)] + suffix)
-            counter += 1
-
-        used_sheet_names.add(sheet_name)
-        return sheet_name
-
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        for name, df in datasets.items():
-            if df is None:
-                continue
-
-            df.head(1000).to_excel(
-                writer,
-                sheet_name=unique_sheet_name(f"{name}_Raw"),
-                index=False
-            )
-
-            overview = pd.DataFrame({
-                "Metric": [
-                    "Rows",
-                    "Columns",
-                    "Missing Cells",
-                    "Numeric Columns",
-                    "Text-like Columns"
-                ],
-                "Value": [
-                    df.shape[0],
-                    df.shape[1],
-                    int(df.isna().sum().sum()),
-                    len(numeric_columns(df)),
-                    len(likely_text_columns(df))
-                ],
-            })
-
-            overview.to_excel(
-                writer,
-                sheet_name=unique_sheet_name(f"{name}_Overview"),
-                index=False
-            )
-
-            for i, col in enumerate(df.columns[:20], start=1):
-                question_summary = summary_table(df, col)
-
-                question_summary.to_excel(
-                    writer,
-                    sheet_name=unique_sheet_name(f"{name}_Q{i}"),
-                    index=False
-                )
-
-    return output.getvalue()
-
-
-# =========================================================
-# Main App
-# =========================================================
-
-st.markdown(
-    """
-    <div class="hero">
-        <div class="hero-title">Pro AI Survey Analytics Dashboard</div>
-        <div class="hero-sub">
-            Upload lecturer and student questionnaire files, explore patterns,
-            test reliability, review open-ended responses, compare datasets,
-            and generate academic AI interpretations.
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-with st.sidebar:
-    st.title("Control Panel")
-    st.caption("Upload files and configure AI.")
-
-    lecturer_file = st.file_uploader(
-        "Lecturer questionnaire",
-        type=["xlsx"],
-        key="lecturer_upload"
-    )
-
-    student_file = st.file_uploader(
-        "Student questionnaire",
-        type=["xlsx"],
-        key="student_upload"
-    )
-
-    st.divider()
-
-    st.subheader("AI Settings")
-
-    st.session_state["manual_api_key"] = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        value=st.session_state.get("manual_api_key", "")
-    )
-
-    st.session_state["selected_model"] = st.text_input(
-        "OpenAI model",
-        value=st.session_state.get("selected_model", "gpt-5.5")
-    )
-
-    st.caption("Each user can enter their own API key. Do not hard-code API keys inside the app.")
-
-
-try:
-    lecturer_df = clean_dataframe(pd.read_excel(lecturer_file)) if lecturer_file else None
-except Exception as error:
-    lecturer_df = None
-    st.error(f"Could not read lecturer file: {error}")
-
-try:
-    student_df = clean_dataframe(pd.read_excel(student_file)) if student_file else None
-except Exception as error:
-    student_df = None
-    st.error(f"Could not read student file: {error}")
-
-
-tabs = st.tabs([
-    "🏠 Overview",
-    "👩‍🏫 Lecturers",
-    "🎓 Students",
-    "⚖️ Comparison",
-    "📤 Export"
-])
-
-
-with tabs[0]:
-    st.markdown("## Project Overview")
-
-    if lecturer_df is None and student_df is None:
-        st.info("Upload at least one Excel file from the sidebar to begin.")
-
-    if lecturer_df is not None:
-        dataset_overview(lecturer_df, "Lecturers")
-
-    if student_df is not None:
-        dataset_overview(student_df, "Students")
-
-
-with tabs[1]:
-    if lecturer_df is None:
-        st.info("Upload the lecturer questionnaire file from the sidebar.")
-    else:
-        sub_tabs = st.tabs([
-            "Overview",
-            "Quality",
-            "Questions",
-            "Multi Chart",
-            "Filters",
-            "Answer Pattern",
-            "Relationships",
-            "Reliability",
-            "Text"
-        ])
-
-        with sub_tabs[0]:
-            dataset_overview(lecturer_df, "Lecturers")
-
-        with sub_tabs[1]:
-            data_quality(lecturer_df, "Lecturers")
-
-        with sub_tabs[2]:
-            question_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[3]:
-            multi_variable_chart_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[4]:
-            filter_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[5]:
-            yes_no_pattern_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[6]:
-            crosstab_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[7]:
-            reliability_lab(lecturer_df, "Lecturers")
-
-        with sub_tabs[8]:
-            text_lab(lecturer_df, "Lecturers")
-
-
-with tabs[2]:
-    if student_df is None:
-        st.info("Upload the student questionnaire file from the sidebar.")
-    else:
-        sub_tabs = st.tabs([
-            "Overview",
-            "Quality",
-            "Questions",
-            "Multi Chart",
-            "Filters",
-            "Answer Pattern",
-            "Relationships",
-            "Reliability",
-            "Text"
-        ])
-
-        with sub_tabs[0]:
-            dataset_overview(student_df, "Students")
-
-        with sub_tabs[1]:
-            data_quality(student_df, "Students")
-
-        with sub_tabs[2]:
-            question_lab(student_df, "Students")
-
-        with sub_tabs[3]:
-            multi_variable_chart_lab(student_df, "Students")
-
-        with sub_tabs[4]:
-            filter_lab(student_df, "Students")
-
-        with sub_tabs[5]:
-            yes_no_pattern_lab(student_df, "Students")
-
-        with sub_tabs[6]:
-            crosstab_lab(student_df, "Students")
-
-        with sub_tabs[7]:
-            reliability_lab(student_df, "Students")
-
-        with sub_tabs[8]:
-            text_lab(student_df, "Students")
-
-
-with tabs[3]:
-    st.markdown("## Lecturer vs Student Comparison")
-
-    if lecturer_df is None or student_df is None:
-        st.info("Upload both files to enable comparison.")
-    else:
-        c1, c2 = st.columns(2)
-
-        with c1:
-            lcol = st.selectbox(
-                "Lecturer question",
-                lecturer_df.columns,
-                key="cmp_lcol"
-            )
-
-            split_l = st.checkbox(
-                "Split lecturer answers",
-                value=True,
-                key="cmp_l_split"
-            )
-
-            if split_l:
-                lsum = split_summary_table(lecturer_df, lcol, ";")
-            else:
-                lsum = summary_table(lecturer_df, lcol)
-
-            st.dataframe(lsum[["Response", "Count", "Percentage"]], width="stretch")
-
-            lfig = px.bar(
-                lsum,
-                x="Response",
-                y="Count",
-                text="Label",
-                title="Lecturer responses"
-            )
-
-            lfig.update_traces(textposition="outside", cliponaxis=False)
-
-            st.plotly_chart(lfig, width="stretch")
-
-        with c2:
-            scol = st.selectbox(
-                "Student question",
-                student_df.columns,
-                key="cmp_scol"
-            )
-
-            split_s = st.checkbox(
-                "Split student answers",
-                value=True,
-                key="cmp_s_split"
-            )
-
-            if split_s:
-                ssum = split_summary_table(student_df, scol, ";")
-            else:
-                ssum = summary_table(student_df, scol)
-
-            st.dataframe(ssum[["Response", "Count", "Percentage"]], width="stretch")
-
-            sfig = px.bar(
-                ssum,
-                x="Response",
-                y="Count",
-                text="Label",
-                title="Student responses"
-            )
-
-            sfig.update_traces(textposition="outside", cliponaxis=False)
-
-            st.plotly_chart(sfig, width="stretch")
-
-        if st.button("Generate AI comparative analysis"):
-            results = f"""
-Lecturer question:
-{lcol}
-
-Lecturer results:
-{lsum[["Response", "Count", "Percentage"]].to_string(index=False)}
-
-Student question:
-{scol}
-
-Student results:
-{ssum[["Response", "Count", "Percentage"]].to_string(index=False)}
-"""
-
-            st.write(
-                ai_generate(
-                    "Lecturer vs Student Comparative Analysis",
-                    results,
-                    "Do not assume both questions measure the same construct unless clearly indicated."
-                )
-            )
-
-
-with tabs[4]:
-    st.markdown("## Export Analysis")
+def ai_interpretation_lab(df, name):
+    st.markdown(f"### {name} AI Interpretation")
 
     st.write(
-        "Download an Excel report containing raw previews, overview metrics, "
-        "and summaries for the first 20 columns of each uploaded dataset."
+        "Generate a high-level interpretation from the selected dataset profile. "
+        "The app only sends summary statistics and selected previews, not the full file."
     )
 
-    if lecturer_df is None and student_df is None:
-        st.info("Upload data first.")
-    else:
-        report = export_report({
-            "Lecturers": lecturer_df,
-            "Students": student_df
+    numeric_cols = numeric_columns(df)
+    cat_cols = categorical_columns(df, max_unique=20)
+    text_cols = likely_text_columns(df)
+
+    selected_context_cols = st.multiselect(
+        "Optional columns to include in the AI context",
+        list(df.columns),
+        default=list(df.columns[:min(5, len(df.columns))]),
+        key=f"{name}_ai_context_cols"
+    )
+
+    profile = {
+        "dataset": name,
+        "rows": df.shape[0],
+        "columns": df.shape[1],
+        "numeric_columns": numeric_cols[:25],
+        "categorical_columns": cat_cols[:25],
+        "text_columns": text_cols[:25],
+        "missing_cells": int(df.isna().sum().sum()),
+    }
+
+    preview = df[selected_context_cols].head(10).to_string(index=False) if selected_context_cols else ""
+
+    st.json(profile)
+
+    if st.button("Generate AI dataset interpretation", key=f"{name}_ai_profile"):
+        st.write(
+            ai_generate(
+                f"Dataset interpretation for {name}",
+                str(profile),
+                preview
+            )
+        )
+
+
+def render_dataset_tab(dataset_name: str, df: pd.DataFrame):
+    subtabs = st.tabs([
+        "Overview",
+        "Quality",
+        "Questions",
+        "Charts",
+        "Filters",
+        "Relationships",
+        "Reliability",
+        "Text",
+        "AI",
+    ])
+
+    with subtabs[0]:
+        dataset_overview(df, dataset_name)
+
+    with subtabs[1]:
+        data_quality(df, dataset_name)
+
+    with subtabs[2]:
+        questions_lab(df, dataset_name)
+
+    with subtabs[3]:
+        charts_lab(df, dataset_name)
+
+    with subtabs[4]:
+        filters_lab(df, dataset_name)
+
+    with subtabs[5]:
+        relationships_lab(df, dataset_name)
+
+    with subtabs[6]:
+        reliability_lab(df, dataset_name)
+
+    with subtabs[7]:
+        text_lab(df, dataset_name)
+
+    with subtabs[8]:
+        ai_interpretation_lab(df, dataset_name)
+
+
+def render_project_overview(datasets: dict):
+    st.header("Project Overview")
+
+    total_files = len(datasets)
+    total_rows = sum(item["df"].shape[0] for item in datasets.values())
+    total_cols = sum(item["df"].shape[1] for item in datasets.values())
+    total_missing = sum(int(item["df"].isna().sum().sum()) for item in datasets.values())
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        metric_card("Datasets", total_files, "Uploaded files")
+
+    with c2:
+        metric_card("Total rows", total_rows, "Combined records")
+
+    with c3:
+        metric_card("Total columns", total_cols, "Across all files")
+
+    with c4:
+        metric_card("Missing cells", total_missing, "Across all files")
+
+    summary_rows = []
+
+    for name, item in datasets.items():
+        df = item["df"]
+        summary_rows.append({
+            "Dataset": name,
+            "Original File": item["filename"],
+            "Rows": df.shape[0],
+            "Columns": df.shape[1],
+            "Numeric Fields": len(numeric_columns(df)),
+            "Text Fields": len(likely_text_columns(df)),
+            "Missing Cells": int(df.isna().sum().sum()),
         })
 
-        st.download_button(
-            "Download Excel Report",
-            data=report,
-            file_name="pro_survey_analysis_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    st.markdown("### Uploaded Files Summary")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
+    st.markdown("### Loaded dataset tabs")
+    pills = "".join([f'<span class="file-pill">📁 {name}</span>' for name in datasets.keys()])
+    st.markdown(pills, unsafe_allow_html=True)
+
+
+def render_comparison_tab(datasets: dict):
+    st.header("Dataset Comparison")
+
+    dataset_names = list(datasets.keys())
+
+    if len(dataset_names) < 2:
+        st.info("Upload at least two datasets to enable comparison.")
+        return
+
+    c1, c2 = st.columns(2)
+    dataset_a_name = c1.selectbox("Dataset A", dataset_names, index=0)
+    dataset_b_name = c2.selectbox("Dataset B", dataset_names, index=1)
+
+    df_a = datasets[dataset_a_name]["df"]
+    df_b = datasets[dataset_b_name]["df"]
+
+    compare_rows = pd.DataFrame([
+        {
+            "Dataset": dataset_a_name,
+            "Rows": df_a.shape[0],
+            "Columns": df_a.shape[1],
+            "Numeric Fields": len(numeric_columns(df_a)),
+            "Text Fields": len(likely_text_columns(df_a)),
+            "Missing Cells": int(df_a.isna().sum().sum()),
+        },
+        {
+            "Dataset": dataset_b_name,
+            "Rows": df_b.shape[0],
+            "Columns": df_b.shape[1],
+            "Numeric Fields": len(numeric_columns(df_b)),
+            "Text Fields": len(likely_text_columns(df_b)),
+            "Missing Cells": int(df_b.isna().sum().sum()),
+        },
+    ])
+
+    st.dataframe(compare_rows, use_container_width=True)
+
+    st.markdown("### Shared columns")
+    common_cols = sorted(set(df_a.columns).intersection(set(df_b.columns)))
+    st.write(f"Shared columns: **{len(common_cols)}**")
+
+    if common_cols:
+        st.dataframe(pd.DataFrame({"Shared Column": common_cols}), use_container_width=True)
+
+    common_numeric = sorted(set(numeric_columns(df_a)).intersection(set(numeric_columns(df_b))))
+
+    if common_numeric:
+        selected_metric = st.selectbox("Compare numeric column", common_numeric)
+
+        values_a = coerce_numeric_series(df_a[selected_metric]).dropna()
+        values_b = coerce_numeric_series(df_b[selected_metric]).dropna()
+
+        compare_chart = pd.DataFrame({
+            "Dataset": [dataset_a_name, dataset_b_name],
+            "Mean": [values_a.mean(), values_b.mean()],
+            "Median": [values_a.median(), values_b.median()],
+            "Valid N": [len(values_a), len(values_b)],
+        })
+
+        st.markdown("### Numeric comparison")
+        st.dataframe(compare_chart, use_container_width=True)
+
+        fig = px.bar(compare_chart, x="Dataset", y="Mean", text="Mean", title=f"Mean Comparison — {selected_metric}")
+        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No common numeric columns found between the selected datasets.")
+
+    if st.button("Generate AI comparison interpretation"):
+        st.write(
+            ai_generate(
+                f"Comparison: {dataset_a_name} vs {dataset_b_name}",
+                compare_rows.to_string(index=False),
+                f"Common columns: {common_cols[:30]}"
+            )
         )
+
+
+def render_export_tab(datasets: dict):
+    st.header("Export")
+
+    export_summary = []
+
+    for name, item in datasets.items():
+        export_summary.append({
+            "Dataset": name,
+            "Original File": item["filename"],
+            "Rows": item["df"].shape[0],
+            "Columns": item["df"].shape[1],
+            "Missing Cells": int(item["df"].isna().sum().sum()),
+        })
+
+    export_df = pd.DataFrame(export_summary)
+    st.dataframe(export_df, use_container_width=True)
+
+    csv = export_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        "Download project summary CSV",
+        data=csv,
+        file_name="survey_analytics_project_summary.csv",
+        mime="text/csv",
+    )
+
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="Project Summary")
+
+        for name, item in datasets.items():
+            safe_sheet_name = re.sub(r"[\[\]\:\*\?\/\\]", "_", name)[:31]
+            item["df"].head(5000).to_excel(writer, index=False, sheet_name=safe_sheet_name)
+
+    st.download_button(
+        "Download Excel workbook",
+        data=output.getvalue(),
+        file_name="survey_analytics_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# =========================================================
+# Sidebar
+# =========================================================
+
+st.sidebar.title("Control Panel")
+st.sidebar.write("Upload one or more datasets and configure analysis.")
+
+uploaded_files = st.sidebar.file_uploader(
+    "Upload CSV or Excel files",
+    type=["csv", "xlsx", "xls"],
+    accept_multiple_files=True,
+    help="Upload one file for a single-dataset analysis, or multiple files to enable comparison.",
+)
+
+datasets = build_datasets(uploaded_files) if uploaded_files else {}
+
+if datasets:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Loaded Datasets")
+
+    for name, item in datasets.items():
+        st.sidebar.success(name)
+        st.sidebar.caption(item["filename"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("AI Settings")
+st.session_state["manual_api_key"] = st.sidebar.text_input(
+    "OpenAI API Key",
+    value=st.session_state.get("manual_api_key", ""),
+    type="password",
+)
+st.session_state["selected_model"] = st.sidebar.text_input(
+    "OpenAI Model",
+    value=st.session_state.get("selected_model", "gpt-5.5"),
+)
+
+st.sidebar.caption("Each user can enter their own API key. Do not hard-code API keys inside the app.")
+
+
+# =========================================================
+# Main UI
+# =========================================================
+
+hero_section()
+
+if not datasets:
+    st.info("Upload at least one CSV or Excel file from the sidebar to begin.")
+
+    st.markdown(
+        """
+        <div class="note-box">
+            <b>How this version works:</b><br>
+            • Upload one file to analyze that dataset only.<br>
+            • Upload two or more files to unlock the Comparison tab.<br>
+            • Tab names are generated from the uploaded file names.<br>
+            • No fixed labels like Lecturer or Student are used anymore.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+tab_labels = ["🏠 Overview"]
+tab_labels += [f"📁 {name}" for name in datasets.keys()]
+
+if len(datasets) > 1:
+    tab_labels += ["⚖️ Comparison"]
+
+tab_labels += ["📦 Export"]
+
+tabs = st.tabs(tab_labels)
+
+tab_index = 0
+
+with tabs[tab_index]:
+    render_project_overview(datasets)
+tab_index += 1
+
+for dataset_name, item in datasets.items():
+    with tabs[tab_index]:
+        render_dataset_tab(dataset_name, item["df"])
+    tab_index += 1
+
+if len(datasets) > 1:
+    with tabs[tab_index]:
+        render_comparison_tab(datasets)
+    tab_index += 1
+
+with tabs[tab_index]:
+    render_export_tab(datasets)
