@@ -23,50 +23,41 @@ CUSTOM_CSS = """
 <style>
     .main, .stApp {
         background:
-            radial-gradient(circle at 14% 8%, rgba(59, 130, 246, 0.24), transparent 32%),
-            radial-gradient(circle at 86% 12%, rgba(168, 85, 247, 0.20), transparent 30%),
-            radial-gradient(circle at 50% 96%, rgba(16, 185, 129, 0.12), transparent 34%),
+            radial-gradient(circle at 12% 8%, rgba(59, 130, 246, 0.25), transparent 34%),
+            radial-gradient(circle at 86% 12%, rgba(168, 85, 247, 0.20), transparent 32%),
+            radial-gradient(circle at 48% 95%, rgba(16, 185, 129, 0.12), transparent 36%),
             linear-gradient(180deg, #040816 0%, #08111f 52%, #030712 100%);
     }
 
     .block-container {
-        max-width: 1220px;
-        padding-top: 2rem;
+        max-width: 1240px;
+        padding-top: 1.8rem;
         padding-bottom: 3rem;
     }
 
-    h1, h2, h3, h4 {
-        color: #f8fafc !important;
-        letter-spacing: -0.03em;
-    }
-
-    p, label, span, div {
-        color: #e5e7eb;
-    }
+    h1, h2, h3, h4 { color: #f8fafc !important; letter-spacing: -0.03em; }
+    p, label, span, div { color: #e5e7eb; }
 
     [data-testid="stSidebar"] {
         background: #0f172a;
         border-right: 1px solid rgba(148, 163, 184, 0.16);
     }
-
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] span {
-        color: #d1d5db !important;
-    }
+    [data-testid="stSidebar"] span { color: #d1d5db !important; }
 
     .hero-card {
         position: relative;
         overflow: hidden;
         border-radius: 34px;
-        padding: 46px;
+        padding: 44px;
         border: 1px solid rgba(148, 163, 184, 0.22);
         background:
             radial-gradient(circle at top left, rgba(59, 130, 246, 0.32), transparent 34%),
             radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.18), transparent 34%),
             linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 27, 75, 0.98) 58%, rgba(7, 17, 31, 0.98) 100%);
         box-shadow: 0 28px 85px rgba(0, 0, 0, 0.42);
-        margin-bottom: 26px;
+        margin-bottom: 24px;
     }
 
     .hero-kicker {
@@ -99,7 +90,7 @@ CUSTOM_CSS = """
     }
 
     .hero-subtitle {
-        max-width: 850px;
+        max-width: 880px;
         margin-top: 18px;
         color: #cbd5e1;
         font-size: 1.08rem;
@@ -111,7 +102,7 @@ CUSTOM_CSS = """
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 12px;
         margin-top: 28px;
-        max-width: 740px;
+        max-width: 760px;
     }
 
     .hero-stat {
@@ -125,13 +116,13 @@ CUSTOM_CSS = """
 
     .studio-grid {
         display: grid;
-        grid-template-columns: 1.16fr 0.84fr;
+        grid-template-columns: 1.12fr 0.88fr;
         gap: 18px;
-        margin-bottom: 24px;
+        margin-bottom: 18px;
     }
 
     .workspace-card {
-        min-height: 355px;
+        min-height: 390px;
         border: 1px solid rgba(148, 163, 184, 0.24);
         background:
             radial-gradient(circle at top left, rgba(59, 130, 246, 0.18), transparent 34%),
@@ -191,6 +182,33 @@ CUSTOM_CSS = """
         border-radius: 16px;
         color: #cbd5e1;
         font-weight: 750;
+    }
+
+    .notice-card {
+        border: 1px solid rgba(251, 191, 36, 0.22);
+        background:
+            radial-gradient(circle at top left, rgba(251, 191, 36, 0.12), transparent 38%),
+            rgba(15, 23, 42, 0.72);
+        border-radius: 28px;
+        padding: 24px;
+        margin: 18px 0 24px 0;
+        box-shadow: 0 18px 50px rgba(0,0,0,.20);
+    }
+
+    .notice-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+    }
+
+    .notice-item {
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(255,255,255,.045);
+        border-radius: 18px;
+        padding: 14px;
+        color: #cbd5e1;
+        line-height: 1.55;
     }
 
     [data-testid="stFileUploader"] section {
@@ -286,8 +304,8 @@ CUSTOM_CSS = """
     }
 
     @media (max-width: 900px) {
-        .hero-card, .workspace-card { padding: 24px; }
-        .studio-grid, .hero-stats { grid-template-columns: 1fr; }
+        .hero-card, .workspace-card, .notice-card { padding: 24px; }
+        .studio-grid, .hero-stats, .notice-grid { grid-template-columns: 1fr; }
     }
 </style>
 """
@@ -522,11 +540,11 @@ def render_hero():
     st.markdown(
         """
         <div class="hero-card">
-            <div class="hero-kicker">✨ Intelligent survey and dataset analytics</div>
+            <div class="hero-kicker">✨ Free survey and dataset analytics</div>
             <div class="hero-title">Turn raw files into <span class="hero-gradient">clear insight.</span></div>
             <div class="hero-subtitle">
                 Upload CSV or Excel datasets, explore data quality, create charts, test reliability, inspect text responses,
-                compare files, and generate AI-assisted interpretations from one polished workspace.
+                compare files, and optionally generate AI-assisted interpretations from one polished workspace.
             </div>
             <div class="hero-stats">
                 <div class="hero-stat">📁 Multi-file upload</div>
@@ -541,8 +559,7 @@ def render_hero():
 
 def render_start_workspace():
     st.markdown('<div class="studio-grid">', unsafe_allow_html=True)
-
-    left, right = st.columns([1.16, 0.84], gap="large")
+    left, right = st.columns([1.12, 0.88], gap="large")
 
     with left:
         st.markdown(
@@ -551,7 +568,7 @@ def render_start_workspace():
                 <div class="card-label">📁 Step 1 · Upload data</div>
                 <div class="card-title">Drop your survey files here.</div>
                 <div class="card-subtitle">
-                    Upload one file for a focused analysis, or upload multiple files to unlock dataset comparison.
+                    Upload one file for focused analysis, or upload multiple files to unlock comparison.
                     Tabs are created automatically using your file names.
                 </div>
             </div>
@@ -563,7 +580,7 @@ def render_start_workspace():
             type=["csv", "xlsx", "xls"],
             accept_multiple_files=True,
             label_visibility="collapsed",
-            help="Supported formats: CSV, XLSX, XLS. You can upload multiple files at once.",
+            help="Supported formats: CSV, XLSX, XLS. Large files may take longer to process.",
         )
 
     with right:
@@ -571,10 +588,10 @@ def render_start_workspace():
             """
             <div class="workspace-card ai-card">
                 <div class="card-label">🤖 Optional · AI assistant</div>
-                <div class="card-title">Add an API key for smarter interpretation.</div>
+                <div class="card-title">Add your own API key for smarter explanations.</div>
                 <div class="card-subtitle">
-                    Add your OpenAI API key if you want the dashboard to help explain charts, summaries, patterns,
-                    reliability results, and open-text responses. You can still use the dashboard without it.
+                    This is optional. The dashboard works without AI. Add your key only if you want help explaining charts,
+                    patterns, reliability results, and open-text responses.
                 </div>
             """,
             unsafe_allow_html=True,
@@ -584,7 +601,7 @@ def render_start_workspace():
             type="password",
             value=st.session_state.get("manual_api_key", ""),
             placeholder="sk-...",
-            help="Optional. Used only for AI-generated interpretations.",
+            help="Optional. Used only inside your current app session for AI-generated interpretations.",
         )
         st.session_state["selected_model"] = st.text_input(
             "OpenAI Model",
@@ -593,17 +610,37 @@ def render_start_workspace():
         st.markdown(
             """
                 <div class="mini-list">
-                    <div class="mini-list-item">✓ Explain charts and patterns</div>
-                    <div class="mini-list-item">✓ Summarise open-ended responses</div>
-                    <div class="mini-list-item">✓ Support report writing</div>
+                    <div class="mini-list-item">✓ Your key is not written to GitHub or saved by this app</div>
+                    <div class="mini-list-item">✓ Refreshing or ending the session clears the typed key</div>
+                    <div class="mini-list-item">✓ Use AI only when you want narrative explanations</div>
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
     st.markdown('</div>', unsafe_allow_html=True)
     return uploaded_files
+
+
+def render_privacy_notice():
+    st.markdown(
+        """
+        <div class="notice-card">
+            <div class="card-label">🔐 Data handling notice</div>
+            <div class="card-title" style="font-size:1.45rem;">Your files are used for analysis in the current session.</div>
+            <div class="card-subtitle">
+                This app is designed as a free analysis tool. It does not include a database feature for storing uploaded files
+                or API keys. When you refresh, close the tab, or start a new session, the uploaded files and typed key are cleared.
+            </div>
+            <div class="notice-grid">
+                <div class="notice-item"><b>Files:</b><br>Processed in the running Streamlit session for charts, tables, summaries, and exports.</div>
+                <div class="notice-item"><b>API key:</b><br>Optional and used only when you press an AI interpretation button.</div>
+                <div class="notice-item"><b>Reminder:</b><br>Avoid uploading highly sensitive personal, medical, financial, or confidential data.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_project_overview(datasets: dict):
@@ -612,7 +649,6 @@ def render_project_overview(datasets: dict):
     total_rows = sum(item["df"].shape[0] for item in datasets.values())
     total_columns = sum(item["df"].shape[1] for item in datasets.values())
     total_missing = sum(int(item["df"].isna().sum().sum()) for item in datasets.values())
-
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         metric_card("Datasets", total_files, "Uploaded files")
@@ -622,7 +658,6 @@ def render_project_overview(datasets: dict):
         metric_card("Total columns", total_columns, "Combined columns")
     with c4:
         metric_card("Missing cells", total_missing, "Across all files")
-
     rows = []
     for name, item in datasets.items():
         df = item["df"]
@@ -636,7 +671,6 @@ def render_project_overview(datasets: dict):
             "Text columns": len(likely_text_columns(df)),
             "Missing cells": int(df.isna().sum().sum()),
         })
-
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Uploaded files summary")
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
@@ -674,10 +708,7 @@ def quality_lab(df, name):
     if not quality.empty:
         fig = px.bar(
             quality.sort_values("Missing %", ascending=False).head(20),
-            x="Column",
-            y="Missing %",
-            text="Missing %",
-            title="Top missingness by column",
+            x="Column", y="Missing %", text="Missing %", title="Top missingness by column",
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         st.plotly_chart(fig, use_container_width=True)
@@ -734,9 +765,7 @@ def relationships_lab(df, name):
     numeric_cols = numeric_columns(df)
     cat_cols = categorical_columns(df, max_unique=40)
     relationship_type = st.selectbox(
-        "Relationship type",
-        ["Numeric vs Numeric", "Categorical crosstab", "Numeric by Category"],
-        key=f"{name}_relationship_type",
+        "Relationship type", ["Numeric vs Numeric", "Categorical crosstab", "Numeric by Category"], key=f"{name}_relationship_type",
     )
     if relationship_type == "Numeric vs Numeric":
         if len(numeric_cols) < 2:
@@ -792,10 +821,7 @@ def reliability_lab(df, name):
         st.info("Need at least two numeric columns for Cronbach’s alpha.")
         return
     selected_cols = st.multiselect(
-        "Select numeric columns",
-        numeric_cols,
-        default=numeric_cols[:min(6, len(numeric_cols))],
-        key=f"{name}_alpha_cols",
+        "Select numeric columns", numeric_cols, default=numeric_cols[:min(6, len(numeric_cols))], key=f"{name}_alpha_cols",
     )
     if len(selected_cols) < 2:
         st.info("Select at least two numeric columns.")
@@ -837,7 +863,7 @@ def text_lab(df, name):
 
 def ai_lab(df, name):
     st.markdown(f"### {name} AI Interpretation")
-    st.write("Generate an AI interpretation from a selected column summary. Add your API key in the AI card on the start area or sidebar.")
+    st.write("Generate an AI interpretation from a selected column summary. Add your own API key in the AI card above first.")
     cols = list(df.columns)
     if not cols:
         st.info("Dataset has no columns.")
@@ -910,10 +936,8 @@ def export_tab(datasets: dict):
     summary_df = pd.DataFrame(summary_rows)
     st.dataframe(summary_df, use_container_width=True)
     st.download_button(
-        "Download summary CSV",
-        data=summary_df.to_csv(index=False).encode("utf-8"),
-        file_name="survey_analytics_summary.csv",
-        mime="text/csv",
+        "Download summary CSV", data=summary_df.to_csv(index=False).encode("utf-8"),
+        file_name="survey_analytics_summary.csv", mime="text/csv",
     )
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
@@ -922,20 +946,25 @@ def export_tab(datasets: dict):
             safe_sheet = re.sub(r"[^A-Za-z0-9 _-]", "", name)[:31] or "Dataset"
             item["df"].head(5000).to_excel(writer, sheet_name=safe_sheet, index=False)
     st.download_button(
-        "Download Excel workbook",
-        data=excel_buffer.getvalue(),
+        "Download Excel workbook", data=excel_buffer.getvalue(),
         file_name="survey_analytics_export.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
 st.sidebar.title("Settings")
-st.sidebar.write("The main workspace contains file upload and optional AI setup.")
+st.sidebar.write("Upload files and optional AI key from the main workspace.")
 st.sidebar.markdown("---")
-st.sidebar.caption("API keys are entered by the user and are not hard-coded into the app.")
+st.sidebar.caption("This app does not include database storage for uploaded files or typed API keys.")
+if st.sidebar.button("Clear current session"):
+    st.cache_data.clear()
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 render_hero()
 uploaded_files = render_start_workspace()
+render_privacy_notice()
 
 datasets = build_datasets(uploaded_files) if uploaded_files else {}
 
@@ -943,7 +972,7 @@ if not datasets:
     st.markdown(
         """
         <div class="empty-state">
-            Upload a CSV or Excel file to generate your analysis workspace.
+            Upload a CSV or Excel file to generate your analysis workspace. AI is optional.
         </div>
         """,
         unsafe_allow_html=True,
