@@ -890,35 +890,121 @@ def render_dataset_tab(dataset_name: str, df: pd.DataFrame):
     with subtabs[8]: ai_lab(df, dataset_name)
 
 
+def column_profile(df: pd.DataFrame, column: str) -> dict:
+    numeric = coerce_numeric_series(df[column])
+    return {
+        "Rows": int(len(df)),
+        "Valid values": int(df[column].notna().sum()),
+        "Unique values": int(df[column].nunique(dropna=True)),
+        "Numeric values": int(numeric.notna().sum()),
+        "Detected as numeric": bool(numeric.notna().sum() >= 2),
+    }
+
+
+def distribution_for_comparison(series: pd.Series, label: str) -> pd.DataFrame:
+    table = series.fillna("Missing").astype(str).str.strip().value_counts(dropna=False).reset_index()
+    table.columns = ["Value", "Count"]
+    table["Dataset column"] = label
+    table["Percentage"] = (table["Count"] / max(len(series), 1) * 100).round(1)
+    return table.head(25)
+
+
 def comparison_tab(datasets: dict):
     st.header("Dataset Comparison")
     names = list(datasets.keys())
     if len(names) < 2:
         st.info("Upload at least two datasets to enable comparison.")
         return
+
     c1, c2 = st.columns(2)
     dataset_a = c1.selectbox("Dataset A", names, index=0)
     dataset_b = c2.selectbox("Dataset B", names, index=1 if len(names) > 1 else 0)
     df_a = datasets[dataset_a]["df"]
     df_b = datasets[dataset_b]["df"]
+
     summary = pd.DataFrame([
         {"Dataset": dataset_a, "Rows": df_a.shape[0], "Columns": df_a.shape[1], "Missing cells": int(df_a.isna().sum().sum())},
         {"Dataset": dataset_b, "Rows": df_b.shape[0], "Columns": df_b.shape[1], "Missing cells": int(df_b.isna().sum().sum())},
     ])
     st.dataframe(summary, use_container_width=True)
+
+    st.subheader("Choose columns to compare")
+    st.write("You can compare any column from Dataset A with any column from Dataset B. The column names do not need to match.")
+    col1, col2 = st.columns(2)
+    column_a = col1.selectbox(f"Column from {dataset_a}", list(df_a.columns), key="compare_column_a")
+    column_b = col2.selectbox(f"Column from {dataset_b}", list(df_b.columns), key="compare_column_b")
+
+    profile_df = pd.DataFrame([
+        {"Dataset": dataset_a, "Column": column_a, **column_profile(df_a, column_a)},
+        {"Dataset": dataset_b, "Column": column_b, **column_profile(df_b, column_b)},
+    ])
+    st.markdown("### Column profiles")
+    st.dataframe(profile_df, use_container_width=True)
+
+    numeric_a = coerce_numeric_series(df_a[column_a]).dropna()
+    numeric_b = coerce_numeric_series(df_b[column_b]).dropna()
+    both_numeric = len(numeric_a) >= 2 and len(numeric_b) >= 2
+
+    if both_numeric:
+        st.markdown("### Numeric comparison")
+        compare_df = pd.DataFrame({
+            "Dataset / Column": [f"{dataset_a} · {column_a}", f"{dataset_b} · {column_b}"],
+            "Mean": [numeric_a.mean(), numeric_b.mean()],
+            "Median": [numeric_a.median(), numeric_b.median()],
+            "Minimum": [numeric_a.min(), numeric_b.min()],
+            "Maximum": [numeric_a.max(), numeric_b.max()],
+            "Valid values": [len(numeric_a), len(numeric_b)],
+        })
+        numeric_display = compare_df.copy()
+        for numeric_col in ["Mean", "Median", "Minimum", "Maximum"]:
+            numeric_display[numeric_col] = numeric_display[numeric_col].round(3)
+        st.dataframe(numeric_display, use_container_width=True)
+
+        fig = px.bar(
+            compare_df,
+            x="Dataset / Column",
+            y="Mean",
+            text="Mean",
+            title="Mean comparison for selected columns",
+        )
+        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+        box_df = pd.concat([
+            pd.DataFrame({"Value": numeric_a, "Dataset / Column": f"{dataset_a} · {column_a}"}),
+            pd.DataFrame({"Value": numeric_b, "Dataset / Column": f"{dataset_b} · {column_b}"}),
+        ], ignore_index=True)
+        fig_box = px.box(box_df, x="Dataset / Column", y="Value", points="all", title="Value distribution comparison")
+        st.plotly_chart(fig_box, use_container_width=True)
+    else:
+        st.markdown("### Distribution comparison")
+        st.info("At least one selected column is not numeric, so the app is comparing response/value distributions instead.")
+        dist_a = distribution_for_comparison(df_a[column_a], f"{dataset_a} · {column_a}")
+        dist_b = distribution_for_comparison(df_b[column_b], f"{dataset_b} · {column_b}")
+        dist_df = pd.concat([dist_a, dist_b], ignore_index=True)
+        st.dataframe(dist_df, use_container_width=True)
+        fig = px.bar(
+            dist_df,
+            x="Value",
+            y="Count",
+            color="Dataset column",
+            barmode="group",
+            title="Selected column distribution comparison",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
     common_numeric = sorted(set(numeric_columns(df_a)).intersection(set(numeric_columns(df_b))))
     if common_numeric:
-        metric = st.selectbox("Common numeric column", common_numeric)
-        compare_df = pd.DataFrame({
-            "Dataset": [dataset_a, dataset_b],
-            "Mean": [coerce_numeric_series(df_a[metric]).mean(), coerce_numeric_series(df_b[metric]).mean()],
-            "Median": [coerce_numeric_series(df_a[metric]).median(), coerce_numeric_series(df_b[metric]).median()],
-        })
-        st.dataframe(compare_df, use_container_width=True)
-        fig = px.bar(compare_df, x="Dataset", y="Mean", title=f"Mean comparison: {metric}")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No common numeric columns found between the selected datasets.")
+        with st.expander("Optional: automatic comparison for columns with the same numeric name"):
+            metric = st.selectbox("Common numeric column", common_numeric)
+            auto_compare_df = pd.DataFrame({
+                "Dataset": [dataset_a, dataset_b],
+                "Mean": [coerce_numeric_series(df_a[metric]).mean(), coerce_numeric_series(df_b[metric]).mean()],
+                "Median": [coerce_numeric_series(df_a[metric]).median(), coerce_numeric_series(df_b[metric]).median()],
+            })
+            st.dataframe(auto_compare_df, use_container_width=True)
+            auto_fig = px.bar(auto_compare_df, x="Dataset", y="Mean", title=f"Mean comparison: {metric}")
+            st.plotly_chart(auto_fig, use_container_width=True)
 
 
 def export_tab(datasets: dict):
